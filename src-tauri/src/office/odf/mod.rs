@@ -68,7 +68,15 @@ mod table;
 mod text;
 
 use super::emit::{self, Notes};
-use super::OfficeDoc;
+use super::text::Section;
+use super::{xml, OfficeDoc};
+
+/// Subtrees the renderers never draw, and the content index therefore leaves out:
+/// speaker notes (`presentation:notes`), comments (`office:annotation`) and the
+/// deleted side of a tracked change (`text:tracked-changes`). Indexing them would
+/// put matches in a document where no highlight can land — and notes in
+/// particular would make every slide of a deck match its own footer.
+pub(super) const NOT_DRAWN: &[&str] = &["notes", "annotation", "tracked-changes"];
 
 /// Renders one section of an ODF package.
 pub fn render(path: &str, section: Option<u32>, terms: &[String]) -> Result<OfficeDoc, String> {
@@ -81,6 +89,50 @@ pub fn render(path: &str, section: Option<u32>, terms: &[String]) -> Result<Offi
         pkg::Class::Text => text::render(package, notes, section, terms),
         pkg::Class::Spreadsheet => sheet::render(package, notes, section, terms),
         pkg::Class::Presentation => slide::render(package, notes, section, terms),
+    }
+}
+
+/// Flat text for the content index, one section per rendered section: a table for
+/// a spreadsheet, a slide for a presentation, the whole body for a text document.
+///
+/// The class comes from `office:body` exactly as in [`render`], and the section
+/// enumeration is the renderers' own (`sheet::tables`, `slide::pages`), so index
+/// section *n* is the section the preview opens for `section = n`.
+pub(super) fn extract_sections(path: &str) -> Result<Vec<Section>, String> {
+    // The package's notes belong to a preview's footer; extraction has no footer,
+    // and a missing stylesheet costs the text nothing.
+    let mut discard = Notes::new();
+    let package = pkg::open(path, &mut discard).map_err(fatal)?;
+    let parsed = xml::parse(&package.content)?;
+    let root = parsed.root_element();
+    match package.class {
+        pkg::Class::Text => {
+            let body = xml::child(root, "body")
+                .and_then(|b| xml::child(b, "text"))
+                .unwrap_or(root);
+            let mut out = String::new();
+            xml::odf_walk_skipping(body, NOT_DRAWN, &mut out);
+            Ok(vec![Section::new("", xml::normalize(&out))])
+        }
+        pkg::Class::Spreadsheet => {
+            let tables = sheet::tables(root);
+            let names = sheet::section_names(&tables);
+            Ok(tables
+                .iter()
+                .zip(names)
+                .map(|(t, name)| Section::new(name, sheet::table_text(*t)))
+                .collect())
+        }
+        pkg::Class::Presentation => {
+            let pages = slide::pages(root);
+            // Slide names are not indexed: a slide's title is in its own text, so
+            // the name would only duplicate it (unlike a sheet name, which appears
+            // nowhere in the cells).
+            Ok(pages
+                .iter()
+                .map(|p| Section::new("", slide::page_text(*p)))
+                .collect())
+        }
     }
 }
 

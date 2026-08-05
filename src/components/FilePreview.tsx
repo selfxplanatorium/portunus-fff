@@ -50,11 +50,12 @@ function pdfKey(path: string, page: number, width: number): string {
   return `${path}#${page}@${width}`;
 }
 
-// Content-match page per (path, query), deterministic so safe to cache. Lets a
-// revisited PDF resolve its match page synchronously - the PdfPreview stays
-// mounted and seeds straight to the (already-rendered) page instead of
-// unmounting for the async content_match_page fetch and blanking a frame.
-const contentMatchPageCache = new Map<string, number>();
+// Content-match section per (path, query), deterministic so safe to cache. A
+// section is a PDF page, a worksheet or a slide. Lets a revisited file resolve its
+// match section synchronously - the reader stays mounted and seeds straight to the
+// (already-rendered) section instead of unmounting for the async
+// content_match_section fetch and blanking a frame.
+const contentMatchSectionCache = new Map<string, number>();
 function contentMatchKey(path: string, query: string): string {
   return `${path}\0${query}`;
 }
@@ -1047,49 +1048,6 @@ function CsvPreview({ path, delim, terms }: { path: string; delim: string; terms
   return <DataTable rows={rows} terms={terms} />;
 }
 
-// ── office text preview (docx / pptx / odt / odp) ────────────────────────────
-
-function OfficeTextPreview({ path, terms }: { path: string; terms: string[] }) {
-  const [source, setSource] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setSource(null);
-    // Backend returns the document as Markdown; render it like a .md file.
-    invoke<string>("read_office_preview", { path })
-      .then(text => { if (!cancelled) setSource(text); })
-      .catch(() => { if (!cancelled) setSource(""); });
-    return () => { cancelled = true; };
-  }, [path]);
-
-  if (source === null) return <div className="text-preview-wrap" />;
-
-  const baseDir = path.slice(0, path.lastIndexOf("/")) || "/";
-  return (
-    <div className="text-preview-wrap" data-selectable>
-      <MarkdownView source={source} baseDir={baseDir} terms={terms} />
-    </div>
-  );
-}
-
-// ── spreadsheet preview (xlsx / ods) ─────────────────────────────────────────
-
-function SpreadsheetPreview({ path, terms }: { path: string; terms: string[] }) {
-  const [rows, setRows] = useState<string[][] | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setRows(null);
-    invoke<string[][]>("read_spreadsheet_preview", { path })
-      .then(r => { if (!cancelled) setRows(r); })
-      .catch(() => { if (!cancelled) setRows([]); });
-    return () => { cancelled = true; };
-  }, [path]);
-
-  if (rows === null || rows.length === 0) return <div className="text-preview-wrap" />;
-  return <DataTable rows={rows} terms={terms} />;
-}
-
 // ── folder preview ──────────────────────────────────────────────────────────
 
 interface FolderEntry { name: string; is_dir: boolean; size?: number; }
@@ -1356,49 +1314,54 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], hi
 
   const [copied, setCopied] = useState(false);
 
-  // Content-match page for a PDF preview, fetched lazily: the backend no longer
-  // computes it for every search result (that ran a per-PDF rescan on each
-  // keystroke), so we resolve it here only for the file actually being previewed.
-  // `null` while pending - we hold the PdfPreview mount until it resolves so the
-  // reader seeds straight to the match page (no page-0 flash then jump). Empty
-  // `terms` (non-content file search) skips the fetch and opens at page 0.
+  // Content-match section for a paged preview - a PDF page, or an office sheet /
+  // slide - fetched lazily: the backend no longer computes it for every search
+  // result (that ran a per-file rescan on each keystroke), so we resolve it here
+  // only for the file actually being previewed. `null` while pending - we hold the
+  // reader's mount until it resolves so it seeds straight to the match section (no
+  // section-0 flash then jump). Empty `terms` (non-content file search) skips the
+  // fetch and opens at section 0.
   const termsKey = terms.join(" ");
-  const [matchPage, setMatchPage] = useState<number | null>(() =>
-    isPdf && terms.length ? contentMatchPageCache.get(contentMatchKey(filePath, termsKey)) ?? null : 0,
+  // A doc-shape office file is one section, so its match section is always 0 and
+  // asking for it would only delay the mount by an IPC round trip. Its in-document
+  // jump is `OfficeDoc.bestMarkId`, which rides along with the render.
+  const paged = isPdf || office === "sheet" || office === "slide";
+  const [matchSection, setMatchSection] = useState<number | null>(() =>
+    paged && terms.length ? contentMatchSectionCache.get(contentMatchKey(filePath, termsKey)) ?? null : 0,
   );
-  // Tracks the file the current matchPage belongs to. Reconciled during render, not in
-  // the effect below: an effect commits one render with the new `filePath` still paired
-  // with the *previous* file's matchPage, and PdfPreview then renders that page of the
-  // new file before the corrected one arrives (the wrong-page flash). Blanking only on
-  // a file change lets a same-file term refetch (i.e. typing) keep the page mounted
-  // instead of unmounting/remounting the reader between keystrokes.
-  const matchPagePathRef = useRef<string | null>(filePath);
-  if (matchPagePathRef.current !== filePath) {
-    matchPagePathRef.current = filePath;
-    // Cache hit (revisited PDF): keep the reader mounted on the right page. Otherwise
-    // `null` holds the mount until the fetch below resolves.
-    setMatchPage(
-      isPdf && terms.length ? contentMatchPageCache.get(contentMatchKey(filePath, termsKey)) ?? null : 0,
+  // Tracks the file the current matchSection belongs to. Reconciled during render, not
+  // in the effect below: an effect commits one render with the new `filePath` still
+  // paired with the *previous* file's matchSection, and the reader then renders that
+  // section of the new file before the corrected one arrives (the wrong-section flash).
+  // Blanking only on a file change lets a same-file term refetch (i.e. typing) keep the
+  // section mounted instead of unmounting/remounting the reader between keystrokes.
+  const matchSectionPathRef = useRef<string | null>(filePath);
+  if (matchSectionPathRef.current !== filePath) {
+    matchSectionPathRef.current = filePath;
+    // Cache hit (revisited file): keep the reader mounted on the right section.
+    // Otherwise `null` holds the mount until the fetch below resolves.
+    setMatchSection(
+      paged && terms.length ? contentMatchSectionCache.get(contentMatchKey(filePath, termsKey)) ?? null : 0,
     );
   }
   useEffect(() => {
-    if (!isPdf || !terms.length) { setMatchPage(0); return; }
-    // Cache hit (revisited PDF, or a term change on the same file): no fetch.
-    const cached = contentMatchPageCache.get(contentMatchKey(filePath, termsKey));
-    if (cached != null) { setMatchPage(cached); return; }
+    if (!paged || !terms.length) { setMatchSection(0); return; }
+    // Cache hit (revisited file, or a term change on the same file): no fetch.
+    const cached = contentMatchSectionCache.get(contentMatchKey(filePath, termsKey));
+    if (cached != null) { setMatchSection(cached); return; }
     let cancelled = false;
-    invoke<number | null>("content_match_page", { path: filePath, query: termsKey })
-      // Same page number -> return prev so PdfPreview's props are referentially
+    invoke<number | null>("content_match_section", { path: filePath, query: termsKey })
+      // Same section number -> return prev so the reader's props are referentially
       // unchanged and it doesn't re-render.
       .then(p => {
-        contentMatchPageCache.set(contentMatchKey(filePath, termsKey), p ?? 0);
-        if (!cancelled) setMatchPage(prev => (prev === (p ?? 0) ? prev : (p ?? 0)));
+        contentMatchSectionCache.set(contentMatchKey(filePath, termsKey), p ?? 0);
+        if (!cancelled) setMatchSection(prev => (prev === (p ?? 0) ? prev : (p ?? 0)));
       })
-      .catch(e => { console.error("[preview] content_match_page failed:", e); if (!cancelled) setMatchPage(0); });
+      .catch(e => { console.error("[preview] content_match_section failed:", e); if (!cancelled) setMatchSection(0); });
     return () => { cancelled = true; };
     // termsKey stands in for the terms array (stable string identity).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, isPdf, termsKey]);
+  }, [filePath, paged, termsKey]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(filePath);
@@ -1444,25 +1407,20 @@ export default function FilePreview({ result, onLaunch, onReveal, terms = [], hi
       </div>
       )}
 
-      {isPdf && matchPage != null && <PdfPreview path={filePath} page={matchPage} terms={terms} highlight={highlight} quicklook={quicklook} />}
+      {isPdf && matchSection != null && <PdfPreview path={filePath} page={matchSection} terms={terms} highlight={highlight} quicklook={quicklook} />}
       {isImage && <ImagePreview path={filePath} terms={terms} highlight={highlight} quicklook={quicklook} />}
       {isSvgFile && <SvgPreview path={filePath} />}
       {isCsvFile && <CsvPreview path={filePath} delim={result.title.toLowerCase().endsWith(".tsv") ? "\t" : ","} terms={terms} />}
-      {office && (
+      {office && matchSection != null && (
         <OfficePreview
           path={filePath}
           filename={result.title}
-          shape={office}
           terms={terms}
           highlight={highlight}
-          // Formats the HTML renderer doesn't cover yet keep the markdown / grid
-          // path. OfficePreview owns the choice; the elements are built here only
-          // because these two renderers live in this file.
-          fallback={
-            office === "sheet"
-              ? <SpreadsheetPreview path={filePath} terms={terms} />
-              : <OfficeTextPreview path={filePath} terms={terms} />
-          }
+          // A section the search matched, or 0 when there is nothing to match. A
+          // sheet or slide document opens there; a doc-shape one has a single
+          // section and ignores it (the in-document jump is `bestMarkId`).
+          initialSection={matchSection}
         />
       )}
       {textLang === "markdown" && <MarkdownPreview path={filePath} terms={terms} />}

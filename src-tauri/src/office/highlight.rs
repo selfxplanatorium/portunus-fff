@@ -30,7 +30,7 @@ use std::fmt::Write as _;
 pub const MAX_MARKS: usize = 2000;
 
 /// Marks within this many *marks* of each other count as one cluster. The
-/// coverage heuristic in `content_index::best_page` / `read_text_preview` windows
+/// coverage heuristic in `content_index::best_section` / `read_text_preview` windows
 /// over pages and over lines; inline HTML has neither, so the closest analogue is
 /// proximity in emitted-mark order, which is document order.
 const CLUSTER_MARKS: usize = 8;
@@ -57,6 +57,12 @@ impl Terms {
         // otherwise be stemmed as one nonsense word and match nothing. Then
         // `query_keys` folds, stems, dedups and drops empties — mirroring
         // `preview.rs::normalize_terms`, including dropping 1-char noise.
+        //
+        // **Raw**, not keyed. This is the one and only keying of the query, and a
+        // caller that keys first breaks the terms it most wants marked: Porter is
+        // not idempotent, so "University" → "univers" → "univer", which matches no
+        // word in any document. See `render_office_doc`, which used to do exactly
+        // that, and `stemming_the_query_twice_is_what_would_break_it` below.
         let words = terms.iter().flat_map(|t| {
             tokenize(t)
                 .into_iter()
@@ -206,7 +212,7 @@ impl Marker {
     }
 
     /// Adds one mark to the cluster window. Same coverage heuristic as
-    /// `content_index::best_page`: rank a window by how many *distinct* query
+    /// `content_index::best_section`: rank a window by how many *distinct* query
     /// keys it covers and keep the earliest window on a tie (strict `>`), so a
     /// multi-term query lands where the terms actually meet rather than on the
     /// first dense run of one of them.
@@ -405,5 +411,30 @@ mod tests {
         m.mark("Sheet1 Widget Sheet1", &terms(&["widget"]));
         assert_eq!(m.best_distinct(), 1);
         assert_eq!(m.best_mark(), Some(0));
+    }
+
+    #[test]
+    fn stemming_the_query_twice_is_what_would_break_it() {
+        // The reported bug, as a unit: searching "The University of Edinburgh"
+        // marked every word but the one that mattered. `render_office_doc` keyed
+        // the terms before handing them over, and this module keyed them again —
+        // Porter is not idempotent, so the second pass turned "univers" into
+        // "univer", a key no document word ever produces.
+        let raw = ["The", "University", "of", "Edinburgh"];
+        assert_eq!(
+            marks_of(&marked("The University of Edinburgh", &raw)),
+            ["The", "University", "of", "Edinburgh"],
+        );
+
+        // What the double keying did, spelled out so the trap stays visible: feed
+        // this module already-keyed terms and the same text loses that word.
+        let keyed: Vec<String> =
+            crate::content_match::query_keys(raw.iter().map(|s| s.to_string()));
+        let pre_keyed: Vec<&str> = keyed.iter().map(String::as_str).collect();
+        let lost = marks_of(&marked("The University of Edinburgh", &pre_keyed));
+        assert!(
+            !lost.contains(&"University".to_string()),
+            "pre-keyed terms cannot match; if they now can, the guard above is moot: {lost:?}"
+        );
     }
 }

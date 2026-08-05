@@ -23,6 +23,7 @@ use super::html::{attr, attrs, emu_to_px, Writer};
 use super::media::{MediaBudget, MediaCache};
 use super::opc::Rels;
 use super::pkg::{self, Budget, Zip};
+use super::text::Section;
 use super::xml::{child, elems};
 use super::{opc, slideshape, xml, OfficeDoc, Shape};
 use roxmltree::Node;
@@ -420,6 +421,44 @@ fn emit_background_picture(
             return;
         }
     }
+}
+
+// ── content index ────────────────────────────────────────────────────────────
+
+/// Flat text for the content index: one section per slide, in `p:sldIdLst` order
+/// — the same order [`render`] uses, so section 3 of the index is the slide the
+/// reader flips to for `section = 3`.
+///
+/// A slide whose part cannot be read keeps its place with empty text rather than
+/// being skipped: dropping it would shift every later slide's index by one, which
+/// is worse than a slide the search cannot find. Speaker notes live in their own
+/// `notesSlide` parts and are not indexed — the preview does not draw them.
+pub(super) fn extract_sections(path: &str) -> Result<Vec<Section>, String> {
+    let mut zip = pkg::open_zip(path)?;
+    let mut budget = Budget::new();
+
+    let pres_part = opc::root_part(&mut zip, &mut budget, "ppt/presentation.xml");
+    let pres_xml = pkg::read_entry(&mut zip, &pres_part, &mut budget)?
+        .ok_or_else(|| format!("pptx: missing presentation part ({pres_part})"))?;
+    let pres_rels = opc::read_rels(&mut zip, &pres_part, &mut budget).unwrap_or_default();
+    let pres_doc = xml::parse(&pres_xml)?;
+    let parts = slide_parts(pres_doc.root_element(), &pres_part, &pres_rels, &mut zip);
+    if parts.is_empty() {
+        return Err("pptx: presentation contains no slides".to_string());
+    }
+
+    let mut out = Vec::with_capacity(parts.len());
+    for part in &parts {
+        let text = match pkg::read_entry(&mut zip, part, &mut budget) {
+            Ok(Some(x)) => xml::xml_text(&x, &["p"], &["t"]).unwrap_or_default(),
+            // Budget exhausted or part unreadable: an empty section, not a missing
+            // one. Slide names are positional, so a title is not read here — it is
+            // in the slide's own text either way.
+            _ => String::new(),
+        };
+        out.push(Section::new("", text));
+    }
+    Ok(out)
 }
 
 // ── presentation ─────────────────────────────────────────────────────────────
@@ -987,5 +1026,90 @@ mod tests {
         assert!(doc.html.contains("left:48px"), "{}", doc.html);
         assert!(doc.html.contains("width:864px"), "{}", doc.html);
         assert!(doc.html.contains("café"), "{}", doc.html);
+    }
+
+    // ── content index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn indexed_sections_follow_the_slide_list_not_part_names() {
+        // `deck` stores the first slide as `slide2.xml`. The old extractor sorted
+        // `ppt/slides/` by name, so its section 0 was the renderer's section 1 —
+        // every preview opened from a content hit would show the other slide.
+        let f = deck("index-order");
+        let sections = extract_sections(f.path()).expect("extract");
+        assert_eq!(sections.len(), f.render(None).sections.len());
+        assert!(sections[0].text.contains("café first"), "{:?}", sections[0].text);
+        assert!(sections[1].text.contains("naïve second"), "{:?}", sections[1].text);
+        // A slide's name is not indexed: its title is already in its own text.
+        assert_eq!(sections[0].name, "");
+    }
+
+    #[test]
+    fn speaker_notes_are_not_indexed() {
+        // The preview does not draw a notes page, so a hit there could never be
+        // highlighted — and every slide of a deck carries one.
+        let f = Fixture::new(
+            "index-notes",
+            &[
+                (
+                    "_rels/.rels",
+                    rels(&[("rId1", "officeDocument", "ppt/presentation.xml")]),
+                ),
+                (
+                    "ppt/presentation.xml",
+                    "<p:presentation xmlns:p=\"p\" xmlns:r=\"r\"><p:sldSz cx=\"9144000\" cy=\"6858000\"/>\
+                     <p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+                        .to_string(),
+                ),
+                (
+                    "ppt/_rels/presentation.xml.rels",
+                    rels(&[("rId1", "slide", "slides/slide1.xml")]),
+                ),
+                ("ppt/slides/slide1.xml", sld(&ph_sp("title", "café"))),
+                (
+                    "ppt/notesSlides/notesSlide1.xml",
+                    sld("<p:sp><p:txBody><a:p><a:r><a:t>naïve-note</a:t></a:r></a:p></p:txBody></p:sp>"),
+                ),
+            ],
+        );
+        let sections = extract_sections(f.path()).expect("extract");
+        assert_eq!(sections.len(), 1);
+        assert!(sections[0].text.contains("café"));
+        assert!(!sections[0].text.contains("naïve-note"), "{:?}", sections[0].text);
+    }
+
+    #[test]
+    fn a_line_break_separates_indexed_words() {
+        // `<a:br/>` carries no characters. Emitting nothing for it fused the runs
+        // on either side into one token, which no query could ever match.
+        let f = Fixture::new(
+            "index-br",
+            &[
+                (
+                    "_rels/.rels",
+                    rels(&[("rId1", "officeDocument", "ppt/presentation.xml")]),
+                ),
+                (
+                    "ppt/presentation.xml",
+                    "<p:presentation xmlns:p=\"p\" xmlns:r=\"r\"><p:sldSz cx=\"9144000\" cy=\"6858000\"/>\
+                     <p:sldIdLst><p:sldId id=\"256\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>"
+                        .to_string(),
+                ),
+                (
+                    "ppt/_rels/presentation.xml.rels",
+                    rels(&[("rId1", "slide", "slides/slide1.xml")]),
+                ),
+                (
+                    "ppt/slides/slide1.xml",
+                    sld(
+                        "<p:sp><p:txBody><a:p>\
+                           <a:r><a:t>café</a:t></a:r><a:br/><a:r><a:t>naïve</a:t></a:r>\
+                         </a:p></p:txBody></p:sp>",
+                    ),
+                ),
+            ],
+        );
+        let text = &extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("café naïve"), "{text:?}");
     }
 }

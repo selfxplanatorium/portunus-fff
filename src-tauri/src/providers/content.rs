@@ -88,7 +88,7 @@ impl Provider for ContentProvider {
                         .unwrap_or("")
                         .to_owned();
                     let escaped = path.replace('"', "\\\"");
-                    // `match_page` is computed lazily by the `content_match_page`
+                    // `match_page` is computed lazily by the `content_match_section`
                     // command only for the file actually being previewed - computing
                     // it here ran a full per-PDF page rescan for every one of the (up
                     // to 50) results on each keystroke, which for common-word queries

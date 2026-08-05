@@ -260,14 +260,15 @@ fn cancel_search() {
     }
 }
 
-/// Best-matching 0-based PDF page for `query`, computed on demand for the single
-/// file being previewed. Split out of `search_content` so the per-PDF page rescan
-/// runs once for the previewed file rather than for every result on each keystroke
-/// (the old behaviour dominated common-word content-search latency). Returns None
-/// when the index is unavailable/contended or no page matched - the preview then
-/// just opens at page 0. The blocking FTS work runs off the main thread.
+/// Best-matching 0-based section for `query` - a PDF page, or an office
+/// document's sheet or slide - computed on demand for the single file being
+/// previewed. Split out of `search_content` so the per-file rescan runs once for
+/// the previewed file rather than for every result on each keystroke (the old
+/// behaviour dominated common-word content-search latency). Returns None when the
+/// index is unavailable/contended or nothing matched - the preview then just opens
+/// at section 0. The blocking FTS work runs off the main thread.
 #[tauri::command]
-async fn content_match_page(
+async fn content_match_section(
     path: String,
     query: String,
     state: tauri::State<'_, ContentState>,
@@ -283,13 +284,13 @@ async fn content_match_page(
         },
     };
     // Reuse ContentProvider's query parsing (dedup + stopword stripping) so the
-    // matched page is chosen from the same selective terms the result list ranked
-    // on - not skewed toward a stopword that appears on every page.
+    // matched section is chosen from the same selective terms the result list
+    // ranked on - not skewed toward a stopword that appears in every section.
     let Some(parsed) = content_index::parse_content_query(&query) else {
         return Ok(None);
     };
     let fts_query = parsed.fts_match();
-    Ok(tauri::async_runtime::spawn_blocking(move || idx.best_page(&path, &fts_query))
+    Ok(tauri::async_runtime::spawn_blocking(move || idx.best_section(&path, &fts_query))
         .await
         .ok()
         .flatten())
@@ -1236,7 +1237,7 @@ pub fn run() {
             list_commands,
             list_icon_themes,
             command_used,
-            content_match_page,
+            content_match_section,
             content_match_keys,
             calc_eval,
             launch_app,
@@ -1268,8 +1269,6 @@ pub fn run() {
             preview::read_text_preview,
             preview::render_image_preview,
             preview::list_folder,
-            preview::read_office_preview,
-            preview::read_spreadsheet_preview,
             preview::render_office_doc,
             // Clipboard provider
             providers::clipboard::paste_clipboard,

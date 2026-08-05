@@ -929,27 +929,6 @@ fn page_text_layer(
     Ok(layer)
 }
 
-#[tauri::command]
-pub fn read_office_preview(path: String) -> Result<String, String> {
-    const MAX_LINES: usize = 300;
-    const MAX_BYTES: usize = 32 * 2048;
-    let text = crate::office::extract_office_markdown(&path)?;
-    let mut out = String::new();
-    for (i, line) in text.lines().enumerate() {
-        if i >= MAX_LINES || out.len() + line.len() + 1 > MAX_BYTES {
-            break;
-        }
-        out.push_str(line);
-        out.push('\n');
-    }
-    Ok(out.trim_end().to_string())
-}
-
-#[tauri::command]
-pub fn read_spreadsheet_preview(path: String) -> Result<Vec<Vec<String>>, String> {
-    crate::office::extract_spreadsheet_grid(&path)
-}
-
 /// One rendered section of an office document, as HTML for the preview iframe.
 ///
 /// Blocking work off the runtime: the renderer inflates zip members, decodes and
@@ -960,9 +939,13 @@ pub async fn render_office_doc(
     section: Option<u32>,
     terms: Option<Vec<String>>,
 ) -> Result<crate::office::OfficeDoc, String> {
-    // Keyed the same way the content index tokenized them, so the highlighter
-    // marks exactly the words the search matched.
-    let terms = normalize_terms(terms.unwrap_or_default());
+    // Raw terms, deliberately: unlike the text and image paths, the office
+    // renderer keys them itself (`office::highlight::Terms::new`, which mirrors
+    // `normalize_terms` including dropping 1-char noise). Keying here as well
+    // stemmed every term *twice*, and Porter is not idempotent — "University"
+    // keyed to "univers" and then to "univer", which matches no word in any
+    // document, so the one term a reader most wants marked silently was not.
+    let terms = terms.unwrap_or_default();
     tauri::async_runtime::spawn_blocking(move || crate::office::render(&path, section, &terms))
         .await
         .map_err(|e| e.to_string())?

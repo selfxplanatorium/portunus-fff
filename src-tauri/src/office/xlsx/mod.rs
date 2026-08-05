@@ -13,6 +13,7 @@ use super::emit::{self, Notes};
 use super::highlight::{Marker, Terms};
 use super::media::{MediaBudget, MediaCache};
 use super::pkg::{self, Budget, Zip};
+use super::text::Section;
 use super::xml::{child, elems, truthy};
 use super::{opc, xml, OfficeDoc, Shape};
 use styles::Styles;
@@ -187,6 +188,117 @@ fn render_capped(
         truncated: out.truncated,
         notes: notes.into_vec(),
     })
+}
+
+// ── content index ────────────────────────────────────────────────────────────
+
+/// Flat text for the content index: one section per worksheet, in `<sheets>`
+/// order — the same order [`render`] uses, so section 3 of the index is the sheet
+/// the reader opens for `section = 3`. A hidden sheet keeps its place, as it does
+/// in the tab strip.
+///
+/// Cells go through the same [`sheet::cell_text`] the renderer uses, so a date
+/// indexes as the date it displays rather than as its serial, a shared string
+/// resolves through the pool, and an inline or cached-formula string is read
+/// rather than skipped. The row and column caps are the renderer's, so anything
+/// found here is something the preview can show and highlight.
+pub(super) fn extract_sections(path: &str) -> Result<Vec<Section>, String> {
+    let mut zip = pkg::open_zip(path)?;
+    let mut budget = Budget::new();
+
+    let wb_part = opc::root_part(&mut zip, &mut budget, "xl/workbook.xml");
+    let wb_xml = pkg::read_entry(&mut zip, &wb_part, &mut budget)?
+        .ok_or_else(|| format!("xlsx: missing workbook part ({wb_part})"))?;
+    let wb_rels = opc::read_rels(&mut zip, &wb_part, &mut budget)?;
+    let (sheets, date1904) = parse_workbook(&wb_xml, &wb_part, &wb_rels)?;
+
+    // Number formats only: no theme, so `Styles::parse` resolves theme colours to
+    // nothing. Indexing reads `fmt` and never a colour.
+    let styles_part = opc::part_by_kind(&wb_rels, &wb_part, "/styles")
+        .unwrap_or_else(|| "xl/styles.xml".to_string());
+    let styles = match pkg::read_entry(&mut zip, &styles_part, &mut budget) {
+        Ok(Some(x)) => Styles::parse(&x, &Theme::default()).unwrap_or_else(|_| Styles::empty()),
+        _ => Styles::empty(),
+    };
+
+    let sst_part = opc::part_by_kind(&wb_rels, &wb_part, "/sharedStrings")
+        .unwrap_or_else(|| "xl/sharedStrings.xml".to_string());
+    let sst = match pkg::read_entry(&mut zip, &sst_part, &mut budget) {
+        Ok(Some(x)) => shared_strings(&x).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
+    let mut out = Vec::with_capacity(sheets.len());
+    for sh in &sheets {
+        let xml_str = match &sh.part {
+            Some(p) => match pkg::read_entry(&mut zip, p, &mut budget) {
+                Ok(Some(x)) => Some(x),
+                // A sheet that cannot be read keeps its place with empty text:
+                // dropping it would shift every later sheet's section index.
+                _ => None,
+            },
+            None => None,
+        };
+        let text = match &xml_str {
+            Some(x) => sheet_text(x, &styles, &sst, date1904).unwrap_or_default(),
+            None => String::new(),
+        };
+        out.push(Section::new(sh.name.clone(), text));
+    }
+    Ok(out)
+}
+
+/// One worksheet's cells as text, rows separated by newlines and cells by tabs.
+///
+/// Tabs rather than spaces so a numeric grid keeps its cells as separate tokens
+/// (`porter unicode61` splits on both, but a tab survives a later change of mind
+/// about cell joining, and it is what a copied selection uses).
+fn sheet_text(
+    xml_str: &str,
+    styles: &Styles,
+    sst: &[String],
+    date1904: bool,
+) -> Result<String, String> {
+    let doc = xml::parse(xml_str)?;
+    let Some(data) = xml::descendant(doc.root_element(), "sheetData") else {
+        return Ok(String::new());
+    };
+    // `cell_text` reports a short shared-string pool through `notes`; the index has
+    // no footer to show it in, and the renderer will report it when the sheet is
+    // previewed.
+    let mut discard = Notes::new();
+    let mut out = String::new();
+    for row in elems(data).filter(|n| n.tag_name().name() == "row") {
+        // Clipped exactly as the renderer clips: a row past `MAX_ROWS` is not
+        // drawn, so a hit in it could never be highlighted.
+        if xml::attr_u32(row, "r").is_some_and(|r| r > MAX_ROWS) {
+            break;
+        }
+        let mut cells = 0usize;
+        for cell in elems(row).filter(|n| n.tag_name().name() == "c") {
+            let col = xml::attr_local(cell, "r")
+                .map(|r| split_cell_ref(r).0)
+                .and_then(col_letter_to_index);
+            if col.is_some_and(|c| c >= MAX_COLS) {
+                continue;
+            }
+            let style_id = xml::attr_u32(cell, "s").unwrap_or(0);
+            let fmt = &styles.get(style_id).fmt;
+            let (text, _) = sheet::cell_text(cell, fmt, sst, date1904, &mut discard);
+            if text.is_empty() {
+                continue;
+            }
+            if cells > 0 {
+                out.push('\t');
+            }
+            out.push_str(&text);
+            cells += 1;
+        }
+        if cells > 0 {
+            out.push('\n');
+        }
+    }
+    Ok(out)
 }
 
 // ── workbook ─────────────────────────────────────────────────────────────────
@@ -1514,5 +1626,168 @@ mod tests {
         assert_eq!(split_cell_ref("A1"), ("A", "1"));
         assert_eq!(split_cell_ref("Sheet"), ("Sheet", ""));
         assert_eq!(split_cell_ref(""), ("", ""));
+    }
+
+    // ── content index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn indexed_sections_follow_the_workbook_order_and_carry_sheet_names() {
+        // Same misleading part names as the render test above: the *second* sheet
+        // is stored as `sheet1.xml`. An extractor that sorted part names would
+        // hand the index two sections in the wrong order, and every preview
+        // opened from a content hit would land on the other sheet.
+        let f = Fixture::new(
+            "index-order",
+            &[
+                (
+                    "xl/workbook.xml",
+                    workbook("", &[("Q1 café", "rId7", ""), ("Widgets", "rId3", "")]),
+                ),
+                (
+                    "xl/_rels/workbook.xml.rels",
+                    rels(&[
+                        ("rId7", "worksheet", "worksheets/sheet4.xml"),
+                        ("rId3", "worksheet", "worksheets/sheet1.xml"),
+                    ]),
+                ),
+                (
+                    "xl/worksheets/sheet4.xml",
+                    worksheet("<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>first-sheet</t></is></c></row></sheetData>"),
+                ),
+                (
+                    "xl/worksheets/sheet1.xml",
+                    worksheet("<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>second-sheet</t></is></c></row></sheetData>"),
+                ),
+                ("xl/styles.xml", styles_xml("<cellXfs count=\"1\"><xf/></cellXfs>")),
+            ],
+        );
+
+        let sections = extract_sections(f.path()).expect("extract");
+        // The index's section count and order must be the renderer's, or a jump
+        // lands on the wrong sheet.
+        assert_eq!(sections.len(), f.render(None).sections.len());
+        assert_eq!(sections[0].name, "Q1 café");
+        assert_eq!(sections[1].name, "Widgets");
+        assert!(sections[0].text.contains("first-sheet"), "{:?}", sections[0].text);
+        assert!(sections[1].text.contains("second-sheet"), "{:?}", sections[1].text);
+
+        // The sheet name is searchable text, and the sections are joined by the
+        // separator `content_index::doc_sections` splits on.
+        let flat = super::super::extract_office_text(f.path()).expect("flat");
+        let split: Vec<&str> = flat.split(super::super::SECTION_SEP).collect();
+        assert_eq!(split.len(), 2);
+        assert!(split[0].starts_with("Q1 café\n"), "{:?}", split[0]);
+        assert!(split[1].starts_with("Widgets\n"), "{:?}", split[1]);
+    }
+
+    #[test]
+    fn indexed_cells_are_more_than_the_shared_string_pool() {
+        // The bug this replaces: extraction read only `sharedStrings.xml`, so a
+        // number, a date, an inline string and a cached formula result were all
+        // unsearchable — and a date was not even present as its serial.
+        let styles = styles_xml(
+            "<numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"yyyy-mm-dd\"/></numFmts>\
+             <cellXfs count=\"2\"><xf/><xf numFmtId=\"164\" applyNumberFormat=\"1\"/></cellXfs>",
+        );
+        let f = Fixture::new(
+            "index-cells",
+            &[
+                ("xl/workbook.xml", workbook("", &[("Sheet1", "rId1", "")])),
+                (
+                    "xl/_rels/workbook.xml.rels",
+                    rels(&[
+                        ("rId1", "worksheet", "worksheets/sheet1.xml"),
+                        ("rId2", "sharedStrings", "sharedStrings.xml"),
+                    ]),
+                ),
+                (
+                    "xl/worksheets/sheet1.xml",
+                    worksheet(
+                        "<sheetData>\
+                           <row r=\"1\">\
+                             <c r=\"A1\" t=\"s\"><v>0</v></c>\
+                             <c r=\"B1\" t=\"inlineStr\"><is><t>naïve</t></is></c>\
+                           </row>\
+                           <row r=\"2\">\
+                             <c r=\"A2\" s=\"1\"><v>44216</v></c>\
+                             <c r=\"B2\"><v>1234.5</v></c>\
+                             <c r=\"C2\" t=\"str\"><f>A1</f><v>formula-result</v></c>\
+                           </row>\
+                         </sheetData>",
+                    ),
+                ),
+                ("xl/sharedStrings.xml", sst_xml(&["<t>café</t>"])),
+                ("xl/styles.xml", styles),
+            ],
+        );
+
+        let sections = extract_sections(f.path()).expect("extract");
+        assert_eq!(sections.len(), 1);
+        let text = &sections[0].text;
+        for want in ["café", "naïve", "1234.5", "formula-result"] {
+            assert!(text.contains(want), "{want:?} missing from {text:?}");
+        }
+        // A date indexes as the date it displays, not as its serial: searching
+        // "2021" has to find the cell the reader sees as 2021-01-20.
+        assert!(text.contains("2021-01-20"), "{text:?}");
+        assert!(!text.contains("44216"), "{text:?}");
+        // Cells are tab-separated and rows newline-separated, so neighbouring
+        // values never fuse into one token.
+        assert_eq!(text.lines().count(), 2);
+        assert!(text.lines().next().unwrap().contains('\t'));
+    }
+
+    #[test]
+    fn indexed_rows_stop_where_the_renderer_clips() {
+        // A hit past the emitted window could never be highlighted, so the index
+        // does not claim it.
+        let mut rows = String::new();
+        for r in 1..=MAX_ROWS + 5 {
+            rows.push_str(&format!(
+                "<row r=\"{r}\"><c r=\"A{r}\" t=\"inlineStr\"><is><t>row{r}</t></is></c></row>"
+            ));
+        }
+        let f = single("index-clip", &format!("<sheetData>{rows}</sheetData>"), &[]);
+        let text = &extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains(&format!("row{MAX_ROWS}")));
+        assert!(!text.contains(&format!("row{}", MAX_ROWS + 1)), "{text:?}");
+    }
+
+    #[test]
+    fn an_unreadable_sheet_keeps_its_section_slot() {
+        // `rId2` resolves to a part the package does not contain. The sheet still
+        // occupies section 1, because dropping it would make section 2 of the
+        // index mean section 1 of the renderer.
+        let f = Fixture::new(
+            "index-gap",
+            &[
+                (
+                    "xl/workbook.xml",
+                    workbook("", &[("A", "rId1", ""), ("Gone", "rId2", ""), ("C", "rId3", "")]),
+                ),
+                (
+                    "xl/_rels/workbook.xml.rels",
+                    rels(&[
+                        ("rId1", "worksheet", "worksheets/sheet1.xml"),
+                        ("rId2", "worksheet", "worksheets/missing.xml"),
+                        ("rId3", "worksheet", "worksheets/sheet3.xml"),
+                    ]),
+                ),
+                (
+                    "xl/worksheets/sheet1.xml",
+                    worksheet("<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>alpha</t></is></c></row></sheetData>"),
+                ),
+                (
+                    "xl/worksheets/sheet3.xml",
+                    worksheet("<sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>gamma</t></is></c></row></sheetData>"),
+                ),
+                ("xl/styles.xml", styles_xml("<cellXfs count=\"1\"><xf/></cellXfs>")),
+            ],
+        );
+        let sections = extract_sections(f.path()).expect("extract");
+        assert_eq!(sections.len(), 3);
+        assert!(sections[0].text.contains("alpha"));
+        assert_eq!(sections[1].text, "");
+        assert!(sections[2].text.contains("gamma"));
     }
 }

@@ -20,6 +20,15 @@ pub fn parse(xml: &str) -> Result<roxmltree::Document<'_>, String> {
 
 // ── XML text helper (OOXML: text in <t> elements) ─────────────────────────────
 
+/// Elements that carry no characters but *are* whitespace: a tab, a line break, a
+/// carriage return. Emitting nothing for them concatenates the runs on either side
+/// into one token, so a tab-separated row indexes as a single unsearchable word.
+const OOXML_SPACE_TAGS: &[&str] = &["tab", "br", "cr"];
+
+/// The ODF spellings of the same thing. `text:s` is a run of spaces and `text:tab`
+/// a tab; both are elements, never character data.
+const ODF_SPACE_TAGS: &[&str] = &["tab", "line-break", "s"];
+
 pub fn xml_text(xml: &str, para_tags: &[&str], text_tags: &[&str]) -> Result<String, String> {
     let doc = parse(xml)?;
     let mut out = String::new();
@@ -27,15 +36,14 @@ pub fn xml_text(xml: &str, para_tags: &[&str], text_tags: &[&str]) -> Result<Str
     Ok(normalize(&out))
 }
 
-pub fn xml_walk(
-    node: roxmltree::Node,
-    para_tags: &[&str],
-    text_tags: &[&str],
-    out: &mut String,
-) {
+pub fn xml_walk(node: roxmltree::Node, para_tags: &[&str], text_tags: &[&str], out: &mut String) {
     let local = node.tag_name().name();
     if text_tags.contains(&local) {
         inner_text(node, out);
+        return;
+    }
+    if node.is_element() && OOXML_SPACE_TAGS.contains(&local) {
+        out.push(' ');
         return;
     }
     for child in node.children() {
@@ -49,17 +57,36 @@ pub fn xml_walk(
 // ODF text often sits as a direct text node of text:p / text:span rather than
 // inside a dedicated <t>; give it a dedicated walker.
 pub fn odf_walk(node: roxmltree::Node, out: &mut String) {
+    odf_walk_skipping(node, &[], out);
+}
+
+/// [`odf_walk`], minus the subtrees whose local name is in `skip`.
+///
+/// The content index uses it to leave out text the preview does not draw —
+/// speaker notes, and the deleted side of a tracked change — because a hit there
+/// is a hit no highlight can ever land on.
+pub fn odf_walk_skipping(node: roxmltree::Node, skip: &[&str], out: &mut String) {
+    if node.is_element() && skip.contains(&node.tag_name().name()) {
+        return;
+    }
     if node.is_text() {
         if let Some(t) = node.text() {
             out.push_str(t);
         }
         return;
     }
-    for child in node.children() {
-        odf_walk(child, out);
-    }
     let local = node.tag_name().name();
-    if local == "p" || local == "h" {
+    if node.is_element() && ODF_SPACE_TAGS.contains(&local) {
+        out.push(' ');
+        return;
+    }
+    for child in node.children() {
+        odf_walk_skipping(child, skip, out);
+    }
+    // A cell's paragraphs, a heading and a list item all end a line. `table-cell`
+    // is here because a row of one-paragraph cells would otherwise run together:
+    // the cell is the boundary the row's own newline cannot supply.
+    if matches!(local, "p" | "h" | "table-cell") {
         out.push('\n');
     }
 }
@@ -236,6 +263,36 @@ mod tests {
     fn parse_accepts_plain_document() {
         let doc = parse("<r><p>café</p></r>").expect("plain XML parses");
         assert_eq!(doc.root_element().tag_name().name(), "r");
+    }
+
+    #[test]
+    fn whitespace_only_elements_keep_words_apart() {
+        // The recall bug: `<w:tab/>` and `<a:br/>` carry no characters, so a walker
+        // that emitted nothing for them turned "café⇥naïve" into one token that no
+        // query could ever match.
+        let ooxml = "<d><p><t>café</t><tab/><t>naïve</t></p><p><t>one</t><br/><t>two</t></p></d>";
+        assert_eq!(
+            xml_text(ooxml, &["p"], &["t"]).unwrap(),
+            "café naïve\none two"
+        );
+
+        let odf = parse("<d><p>café<tab/>naïve</p><p>one<line-break/>two</p></d>").unwrap();
+        let mut out = String::new();
+        odf_walk(odf.root_element(), &mut out);
+        assert_eq!(normalize(&out), "café naïve\none two");
+    }
+
+    #[test]
+    fn odf_walk_skipping_drops_named_subtrees() {
+        let doc = parse("<d><p>kept</p><notes><p>hidden</p></notes></d>").unwrap();
+        let mut out = String::new();
+        odf_walk_skipping(doc.root_element(), &["notes"], &mut out);
+        assert_eq!(normalize(&out), "kept");
+        // The skip has to reach a nested subtree, not just a root-level child.
+        let deep = parse("<d><body><p>kept</p><notes><p>hidden</p></notes></body></d>").unwrap();
+        let mut out = String::new();
+        odf_walk_skipping(deep.root_element(), &["notes"], &mut out);
+        assert_eq!(normalize(&out), "kept");
     }
 
     #[test]

@@ -7,7 +7,6 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import type { ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { OfficeDoc, OfficeShape } from "../../types";
 import { officeShape } from "../../utils";
@@ -29,34 +28,17 @@ import { officeScroll } from "./scrollRegistry";
 import { useOfficeHtml } from "./useOfficeHtml";
 
 /**
- * Extensions the Rust HTML renderer handles today, per shape. Anything absent keeps
- * going through the markdown / grid path (`fallback`).
+ * Whether this file gets the rendered-HTML office preview — i.e. whether it draws
+ * its own match marks, honours Ctrl+H, and flips sections with Ctrl+←/→.
  *
- * All six are rendered now, so nothing falls back in practice — but the table stays
- * because it is what the footer hints and the action panel agree with the preview
- * about (see `officeRendersHtml`), and because it is keyed by shape rather than as a
- * flat set: a format the renderer cannot produce must answer with its legacy view
- * rather than with the frame's error card.
- */
-const HTML_RENDERED: Record<OfficeShape, ReadonlySet<string>> = {
-  sheet: new Set(["xlsx", "ods"]),
-  slide: new Set(["pptx", "odp"]),
-  doc: new Set(["docx", "odt"]),
-};
-
-/**
- * Whether this file gets the rendered-HTML preview rather than the markdown / grid
- * fallback — i.e. whether it draws its own match marks, honours Ctrl+H, and flips
- * sections with Ctrl+←/→.
- *
- * Exported because the footer hint bar and the action panel have to agree with the
- * preview about which files those chords do something for, and `HTML_RENDERED` is
- * the single fact they both need.
+ * Every extension `officeShape` names is rendered by the Rust renderer, so today
+ * this is exactly "is it an office file". It stays a named function because the
+ * footer hint bar and the action panel have to agree with the preview about which
+ * files those chords do something for: a format added to `officeShape` ahead of its
+ * renderer has to make this return false again, and there is one place to do that.
  */
 export function officeRendersHtml(filename: string): boolean {
-  const shape = officeShape(filename);
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  return shape !== null && HTML_RENDERED[shape].has(ext);
+  return officeShape(filename) !== null;
 }
 
 /** A fitted slide keeps a hair of letterbox rather than touching the panel edge. */
@@ -142,46 +124,37 @@ const subscribeTheme = (cb: () => void) => {
  *  cannot receive them itself (see the focus-custody note in `officeBootstrap`). */
 const SEL_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
 
-// ── dispatcher ───────────────────────────────────────────────────────────────
+// ── rendered-HTML preview ────────────────────────────────────────────────────
 
 interface Props {
   path: string;
   filename: string;
-  shape: OfficeShape;
   terms: string[];
   highlight: boolean;
-  /** The pre-existing markdown / grid renderer, for formats the HTML renderer
-   *  does not cover yet. */
-  fallback: ReactNode;
+  /** Section to open on - the one the content index says matched `terms`, or 0.
+   *  `null` is "the backend's own default" (for a workbook, the first non-hidden
+   *  sheet), which is what a preview opened without a search query wants. */
+  initialSection?: number | null;
 }
 
-/**
- * Routes an office file to the rendered-HTML frame or to the legacy renderer.
- *
- * The gate is the file extension, not the shape alone: `ods` is a sheet too, but
- * the backend has no ODF HTML renderer yet and would answer with an error.
- */
-export default function OfficePreview({ path, filename, shape, terms, highlight, fallback }: Props) {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  if (!HTML_RENDERED[shape].has(ext)) return <>{fallback}</>;
-  return <OfficeHtmlPreview path={path} filename={filename} terms={terms} highlight={highlight} />;
-}
-
-// ── rendered-HTML preview ────────────────────────────────────────────────────
-
-// The variant the frame is scaffolded for comes from the *rendered* document
-// (`doc.shape`), not from the extension - the renderer is the authority on what
-// it produced.
-function OfficeHtmlPreview({
+// There is no shape prop and no fallback renderer: every office format the app
+// recognises is rendered by the Rust renderer, and the variant the frame is
+// scaffolded for comes from the *rendered* document (`doc.shape`) rather than from
+// the extension - the renderer is the authority on what it produced.
+export default function OfficePreview({
   path,
   filename,
   terms,
   highlight,
-}: Omit<Props, "fallback" | "shape">) {
+  initialSection,
+}: Props) {
   const epoch = useSyncExternalStore(subscribeTheme, () => themeEpoch);
   // `null` means "whichever section the backend considers the default" (for a
-  // workbook, the first non-hidden sheet). The tab strip sets it to an index.
-  const [section, setSection] = useState<number | null>(null);
+  // workbook, the first non-hidden sheet). The tab strip sets it to an index, and
+  // `initialSection` seeds it with the section the search matched - which is why
+  // the first painted frame is already the right sheet or slide rather than a flip
+  // away from it.
+  const [section, setSection] = useState<number | null>(initialSection ?? null);
   // Reset on a file change. PreviewPanel keys by `result.kind` and every file
   // result shares one kind, so this component instance is reused across results -
   // without this, sheet 3 of the last workbook would be requested for the next
@@ -197,7 +170,7 @@ function OfficeHtmlPreview({
   const fitToRef = useRef<FitTarget | null>(null);
   if (pathRef.current !== path) {
     pathRef.current = path;
-    setSection(null);
+    setSection(initialSection ?? null);
     // A new file opens at its own natural zoom - for a slide or a page, its own
     // fit, which is a property of *this* canvas / paper size and has to be
     // measured again.

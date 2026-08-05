@@ -117,32 +117,14 @@ fn render_with(
 
     let parsed = xml::parse(&content)?;
     let root = parsed.root_element();
-    let book = xml::child(root, "body").and_then(|b| xml::child(b, "spreadsheet"));
-    let tables: Vec<Node> = book
-        .map(|b| {
-            elems(b)
-                .filter(|n| n.tag_name().name() == "table")
-                .take(MAX_SHEETS)
-                .collect()
-        })
-        .unwrap_or_default();
+    let tables = tables(root);
     if tables.is_empty() {
         return Err(NOTE_BODY.to_string());
     }
 
     let last = tables.len().saturating_sub(1) as u32;
     let idx = section.map(|s| s.min(last)).unwrap_or(0);
-    let sections: Vec<String> = tables
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            attr_local(*t, "name")
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("Sheet {}", i + 1))
-        })
-        .collect();
+    let sections = section_names(&tables);
 
     let table = tables[idx as usize];
     let query = Terms::new(terms);
@@ -237,6 +219,96 @@ fn render_with(
         truncated,
         notes: notes.into_vec(),
     })
+}
+
+// ── sections ─────────────────────────────────────────────────────────────────
+//
+// The section list is the seam the content index shares with the renderer: the
+// index stores one row per section and hands the section number back, so both
+// sides must enumerate the workbook's tables the same way. One function each,
+// used by both, rather than two matching loops.
+
+/// The document's tables, in body order.
+pub(super) fn tables<'a>(root: Node<'a, 'a>) -> Vec<Node<'a, 'a>> {
+    xml::child(root, "body")
+        .and_then(|b| xml::child(b, "spreadsheet"))
+        .map(|b| {
+            elems(b)
+                .filter(|n| n.tag_name().name() == "table")
+                .take(MAX_SHEETS)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Sheet names for the tab strip, positional when a table states none.
+pub(super) fn section_names(tables: &[Node]) -> Vec<String> {
+    tables
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            attr_local(*t, "name")
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Sheet {}", i + 1))
+        })
+        .collect()
+}
+
+/// One table's cells as flat text for the content index, rows separated by
+/// newlines and cells by tabs.
+///
+/// Reads the *stored* display text, which is what the grid shows — so a formatted
+/// number indexes the way the author saw it. A cell holding only `office:value`
+/// (one its producer never displayed) contributes the raw value: the renderer runs
+/// it through a number style, and reproducing that here would mean carrying the
+/// style cascade into the index for a cell the preview marks as having no saved
+/// text anyway.
+///
+/// Repetition contributes its text once. `table:number-columns-repeated` reaches
+/// 16368 in a real file, and 16368 copies of the same word is not recall.
+pub(super) fn table_text(table: Node) -> String {
+    let mut out = String::new();
+    let mut r: u32 = 0;
+    for row in elems(table).filter(|n| n.tag_name().name() == "table-row") {
+        r += attr_u32(row, "number-rows-repeated").unwrap_or(1).max(1);
+        // Clipped where the renderer clips: a row past the window is not drawn, so
+        // a hit in it could never be highlighted.
+        if r > MAX_ROWS {
+            break;
+        }
+        let mut c: usize = 0;
+        let mut cells = 0usize;
+        for cell in elems(row).filter(|n| {
+            matches!(n.tag_name().name(), "table-cell" | "covered-table-cell")
+        }) {
+            c += attr_u32(cell, "number-columns-repeated").unwrap_or(1).max(1) as usize;
+            if c > MAX_COLS {
+                break;
+            }
+            let mut text = String::new();
+            xml::odf_walk(cell, &mut text);
+            let text = text.trim();
+            let owned = if text.is_empty() {
+                attr_local(cell, "value").unwrap_or("").trim().to_string()
+            } else {
+                text.replace('\n', " ")
+            };
+            if owned.is_empty() {
+                continue;
+            }
+            if cells > 0 {
+                out.push('\t');
+            }
+            out.push_str(&owned);
+            cells += 1;
+        }
+        if cells > 0 {
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// A sheet with nothing in it: the grid's own empty card, so the tab strip still
@@ -1219,5 +1291,69 @@ mod tests {
         assert_eq!(t[1].px, 10.0);
         assert_eq!(t[3].px, 30.0);
         assert!(t[2].hidden);
+    }
+
+    // ── content index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn indexed_sections_are_the_tables_and_carry_their_names() {
+        let f = book(
+            "index-book",
+            "",
+            "",
+            &format!(
+                "{}{}",
+                sheet("Alap", "<table:table-column/>", &text_row(&["café"])),
+                sheet("Widget", "<table:table-column/>", &text_row(&["naïve"])),
+            ),
+        );
+        let sections = crate::office::odf::extract_sections(f.path()).expect("extract");
+        // The index and the tab strip must agree, or a jump opens the wrong sheet.
+        assert_eq!(sections.len(), f.doc().sections.len());
+        assert_eq!(sections[0].name, "Alap");
+        assert_eq!(sections[1].name, "Widget");
+        assert!(sections[0].text.contains("café"), "{:?}", sections[0].text);
+        assert!(sections[1].text.contains("naïve"), "{:?}", sections[1].text);
+    }
+
+    #[test]
+    fn indexed_cells_keep_their_displayed_text_and_stay_separate_tokens() {
+        // ODF stores the formatted text beside the value, so the index reads what
+        // the author saw. A value-only cell (one the producer never displayed)
+        // contributes its raw value rather than nothing.
+        let rows = "<table:table-row>\
+             <table:table-cell office:value-type=\"float\" office:value=\"1752\">\
+             <text:p>1,752 m</text:p></table:table-cell>\
+             <table:table-cell office:value-type=\"float\" office:value=\"42\"/>\
+             </table:table-row>";
+        let f = book("index-cells", "", "", &sheet("S", "<table:table-column/>", rows));
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("1,752 m"), "{text:?}");
+        assert!(text.contains("42"), "{text:?}");
+        assert!(text.contains('\t'), "cells must not fuse: {text:?}");
+    }
+
+    #[test]
+    fn indexed_rows_stop_where_the_grid_clips() {
+        let mut rows = String::new();
+        for r in 1..=MAX_ROWS + 5 {
+            rows.push_str(&text_row(&[&format!("row{r}")]));
+        }
+        let f = book("index-clip", "", "", &sheet("S", "<table:table-column/>", &rows));
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains(&format!("row{MAX_ROWS}")));
+        assert!(!text.contains(&format!("row{}", MAX_ROWS + 1)), "{text:?}");
+    }
+
+    #[test]
+    fn a_repeated_cell_contributes_its_text_once() {
+        // `table:number-columns-repeated` reaches 16368 in a real file, and 16368
+        // copies of one word is not recall.
+        let rows = "<table:table-row><table:table-cell table:number-columns-repeated=\"9\" \
+             office:value-type=\"string\"><text:p>café</text:p></table:table-cell>\
+             </table:table-row>";
+        let f = book("index-rep", "", "", &sheet("S", "<table:table-column/>", rows));
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert_eq!(text.matches("café").count(), 1, "{text:?}");
     }
 }

@@ -174,15 +174,7 @@ fn render_with(
 
     let parsed = xml::parse(&content)?;
     let root = parsed.root_element();
-    let pres = child(root, "body").and_then(|b| child(b, "presentation"));
-    let pages: Vec<Node> = pres
-        .map(|p| {
-            elems(p)
-                .filter(|n| n.tag_name().name() == "page")
-                .take(MAX_SLIDES)
-                .collect()
-        })
-        .unwrap_or_default();
+    let pages = pages(root);
     if pages.is_empty() {
         // Not a degradation: a deck with no slides has nothing this renderer can
         // show, and the frontend's fallback path says more than an empty canvas.
@@ -194,11 +186,7 @@ fn render_with(
     // Every slide is already parsed, so the strip can carry each one's own name
     // without reading anything more — unlike the pptx path, which would have to
     // open every slide part to do the same.
-    let sections: Vec<String> = pages
-        .iter()
-        .enumerate()
-        .map(|(i, p)| page_name(*p, i))
-        .collect();
+    let sections = page_names(&pages);
 
     let page = pages[idx as usize];
     let setup = styles.page_setup(attr_local(page, "master-page-name"));
@@ -289,6 +277,44 @@ fn render_with(
 }
 
 // ── the deck ─────────────────────────────────────────────────────────────────
+//
+// `pages` and `page_names` are the seam the content index shares with the
+// renderer: the index stores one row per slide and hands the slide number back,
+// so both sides must enumerate the deck the same way. One function each, used by
+// both, rather than two matching loops.
+
+/// The deck's slides, in body order.
+pub(super) fn pages<'a>(root: Node<'a, 'a>) -> Vec<Node<'a, 'a>> {
+    child(root, "body")
+        .and_then(|b| child(b, "presentation"))
+        .map(|p| {
+            elems(p)
+                .filter(|n| n.tag_name().name() == "page")
+                .take(MAX_SLIDES)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Slide names for the section strip.
+pub(super) fn page_names(pages: &[Node]) -> Vec<String> {
+    pages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| page_name(*p, i))
+        .collect()
+}
+
+/// One slide's shape text as flat text for the content index.
+///
+/// The master's furniture is not indexed even though the slide draws it: it is the
+/// same text on every slide of the deck, so indexing it would make every slide
+/// match a query for a footer.
+pub(super) fn page_text(page: Node) -> String {
+    let mut out = String::new();
+    xml::odf_walk_skipping(page, super::NOT_DRAWN, &mut out);
+    xml::normalize(&out)
+}
 
 /// One slide's name for the section strip: its own title text, else a name the
 /// author chose, else its position.
@@ -1224,5 +1250,62 @@ mod tests {
         // the slide.
         assert!(!html.contains("half a box"), "{html}");
         assert!(!html.contains("class=\"pp-sp\""), "{html}");
+    }
+
+    // ── content index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn indexed_sections_are_the_slides_in_body_order() {
+        let f = deck(
+            "index-deck",
+            "",
+            "",
+            "",
+            &format!(
+                "{}{}",
+                page("One", &text_frame("", "café first")),
+                page("Two", &text_frame("", "naïve second")),
+            ),
+        );
+        let sections = crate::office::odf::extract_sections(f.path()).expect("extract");
+        // The index and the section strip must agree, or a jump opens the wrong slide.
+        assert_eq!(sections.len(), f.doc().sections.len());
+        assert!(sections[0].text.contains("café first"), "{:?}", sections[0].text);
+        assert!(sections[1].text.contains("naïve second"), "{:?}", sections[1].text);
+        // A slide's name is not indexed: its title is already in its own text.
+        assert_eq!(sections[0].name, "");
+    }
+
+    #[test]
+    fn speaker_notes_are_not_indexed() {
+        // The renderer drops the notes page (see the test above), so a hit in it
+        // could never be highlighted — and every slide of a deck carries one, which
+        // would make every slide match a query for its own footer.
+        let shapes = format!(
+            "{}<presentation:notes><draw:frame svg:width=\"4in\" svg:height=\"2in\">\
+             <draw:text-box><text:p>only for the speaker</text:p></draw:text-box>\
+             </draw:frame></presentation:notes>",
+            text_frame("", "on the slide")
+        );
+        let f = deck("index-notes", "", "", "", &page("One", &shapes));
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("on the slide"), "{text:?}");
+        assert!(!text.contains("only for the speaker"), "{text:?}");
+    }
+
+    #[test]
+    fn master_furniture_is_not_indexed() {
+        // The slide draws it, but it is the same text on every slide of the deck.
+        let f = deck(
+            "index-master",
+            "",
+            &text_frame("", "every slide footer"),
+            "",
+            &page("One", &text_frame("", "café")),
+        );
+        assert!(f.doc().html.contains("every slide footer"), "the master is drawn");
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("café"), "{text:?}");
+        assert!(!text.contains("every slide footer"), "{text:?}");
     }
 }

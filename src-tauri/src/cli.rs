@@ -23,11 +23,18 @@ pub fn handle_cli_args() -> bool {
     // (`portunus render-office x.xlsx > /tmp/x.html` and open it in a browser).
     if args.get(1).map(String::as_str) == Some("render-office") {
         let Some(path) = args.get(2) else {
-            eprintln!("usage: portunus render-office <file> [section]");
+            eprintln!("usage: portunus render-office <file> [section] [term…]");
             std::process::exit(2);
         };
         let section = args.get(3).and_then(|s| s.parse::<u32>().ok());
-        match crate::office::render(path, section, &[]) {
+        // Anything after the section is a search term, so the emit-time
+        // highlighting can be inspected the way the preview would show it.
+        let terms: Vec<String> = args
+            .iter()
+            .skip(if section.is_some() { 4 } else { 3 })
+            .cloned()
+            .collect();
+        match crate::office::render(path, section, &terms) {
             Ok(doc) => {
                 // Notes and section list go to stderr so stdout stays pipeable
                 // straight into a file.
@@ -46,10 +53,50 @@ pub fn handle_cli_args() -> bool {
                 for n in &doc.notes {
                     eprintln!("note: {n}");
                 }
+                eprintln!(
+                    "marks={} best={:?}",
+                    doc.html.matches("<mark class=\"preview-hl\"").count(),
+                    doc.best_mark_id
+                );
                 println!(
                     "<!doctype html><meta charset=\"utf-8\"><title>{}</title>{}",
                     path, doc.html
                 );
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("portunus: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // `portunus index-office <file>` - dump what the content index would store for
+    // one office document: one block per section, in the renderer's section order.
+    // The companion of `render-office`: that one shows what the reader sees, this
+    // one what a search can find, and a mismatch between their section counts is
+    // exactly the bug that opens a preview on the wrong sheet.
+    if args.get(1).map(String::as_str) == Some("index-office") {
+        let Some(path) = args.get(2) else {
+            eprintln!("usage: portunus index-office <file>");
+            std::process::exit(2);
+        };
+        match crate::office::extract_office_text(path) {
+            Ok(text) => {
+                let sections: Vec<&str> = text.split(crate::office::SECTION_SEP).collect();
+                let rendered = crate::office::render(path, None, &[])
+                    .map(|d| d.sections.len().max(1))
+                    .unwrap_or(0);
+                eprintln!(
+                    "sections={} rendered_sections={} chars={}",
+                    sections.len(),
+                    rendered,
+                    text.chars().count()
+                );
+                for (i, s) in sections.iter().enumerate() {
+                    println!("── section {i} ({} chars) ──", s.chars().count());
+                    println!("{s}");
+                }
                 std::process::exit(0);
             }
             Err(e) => {
@@ -110,7 +157,8 @@ SUBCOMMANDS:
                       Write the wrapper script + Firefox manifest for <name>
   render-office <file> [section]
                       Print an office document's rendered preview HTML to stdout
-                      (development aid for comparing fidelity against LibreOffice)", env!("CARGO_PKG_VERSION"));
+                      (development aid for comparing fidelity against LibreOffice)
+  index-office <file> Print the per-section text the content index would store", env!("CARGO_PKG_VERSION"));
         return true;
     }
 

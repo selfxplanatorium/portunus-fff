@@ -30,8 +30,14 @@ const DEFAULT_COL_CHARS: f32 = 8.43;
 const DEFAULT_ROW_PT: f32 = 15.0;
 
 /// A column narrower than this is still given a sliver, so a hidden-by-zero-width
-/// column does not collapse the gutter alignment.
+/// column does not collapse the gutter alignment. `MIN_ROW_PX` is the same guard on
+/// the other axis: `ht="0"` is how some producers spell a hidden row, and a
+/// genuinely 0px `<tr>` puts the gutter and the grid at different heights, because a
+/// row's own cells can still force a box while the gutter cell does not.
+///
+/// A row the sheet really hides states `hidden="1"`, which drops the track outright.
 const MIN_COL_PX: f32 = 2.0;
+const MIN_ROW_PX: f32 = 2.0;
 const MAX_COL_PX: f32 = 2000.0;
 const MAX_ROW_PX: f32 = 1000.0;
 
@@ -229,7 +235,7 @@ fn sheet_settings(root: roxmltree::Node<'_, '_>) -> Settings {
         .unwrap_or_else(|| chars_to_px(DEFAULT_COL_CHARS));
     let def_row_px = fmt_pr
         .and_then(|n| attr_f32(n, "defaultRowHeight"))
-        .map(|pt| pt_to_px(pt).clamp(1.0, MAX_ROW_PX).round())
+        .map(|pt| pt_to_px(pt).clamp(MIN_ROW_PX, MAX_ROW_PX).round())
         .unwrap_or_else(|| pt_to_px(DEFAULT_ROW_PT).round());
 
     Settings {
@@ -261,15 +267,24 @@ fn parse_cols(root: roxmltree::Node<'_, '_>, def_col_px: f32) -> Vec<Track> {
             // measurement or Excel computed it; both are stored values and both are
             // honoured, so only presence matters here.
             let width = attr_f32(c, "width").map(chars_to_px);
-            let hidden = attr_bool(c, "hidden").unwrap_or(false);
+            let hidden = attr_bool(c, "hidden");
             let style = attr_u32(c, "style");
+            // One rule for all three: a definition changes what it states and leaves
+            // the rest alone. Overlapping `<col>` runs are normal — a sheet-wide one
+            // setting the width, a narrow one hiding a column — and resetting
+            // `hidden`/`style` from an attribute the later definition never mentioned
+            // silently unhid columns the sheet does hide.
             for i in min..=max.min(super::MAX_COLS) {
                 let track = &mut cols[i - 1];
                 if let Some(w) = width {
                     track.px = w;
                 }
-                track.hidden = hidden;
-                track.style = style;
+                if let Some(h) = hidden {
+                    track.hidden = h;
+                }
+                if style.is_some() {
+                    track.style = style;
+                }
             }
         }
     }
@@ -309,6 +324,13 @@ fn used_extent(root: roxmltree::Node<'_, '_>, styles: &super::styles::Styles) ->
             // dominates both the payload and every relayout the preview does.
             let mut inked = false;
             let mut implied_col: usize = 0;
+            // Accumulated per row rather than straight into the extent: a row past
+            // `MAX_ROWS` is never drawn, so nothing in it may widen the grid. Folding
+            // it in as it was found emitted entirely empty columns for any sheet
+            // whose one wide row sits below the row cap, and claimed columns were
+            // clipped when none of the drawn ones were.
+            let mut row_cols: usize = 0;
+            let mut past_col_cap = false;
             for cn in elems(rn).filter(|n| n.tag_name().name() == "c") {
                 let Some(c) = cell_col(cn, implied_col) else {
                     continue;
@@ -319,10 +341,10 @@ fn used_extent(root: roxmltree::Node<'_, '_>, styles: &super::styles::Styles) ->
                 }
                 inked = true;
                 if c >= super::MAX_COLS {
-                    extent.cols_clipped = true;
+                    past_col_cap = true;
                     continue;
                 }
-                extent.ncols = extent.ncols.max(c + 1);
+                row_cols = row_cols.max(c + 1);
             }
             if !inked {
                 continue;
@@ -331,6 +353,8 @@ fn used_extent(root: roxmltree::Node<'_, '_>, styles: &super::styles::Styles) ->
                 extent.rows_clipped = true;
                 continue;
             }
+            extent.cols_clipped |= past_col_cap;
+            extent.ncols = extent.ncols.max(row_cols);
             extent.last_row = extent.last_row.max(r);
         }
     }
@@ -423,7 +447,7 @@ fn row_tracks(
         };
         let track = &mut rows[r as usize];
         if let Some(ht) = attr_f32(rn, "ht") {
-            track.px = pt_to_px(ht).clamp(0.0, MAX_ROW_PX).round();
+            track.px = pt_to_px(ht).clamp(MIN_ROW_PX, MAX_ROW_PX).round();
         }
         track.hidden = attr_bool(rn, "hidden").unwrap_or(false);
         // `customFormat` is what says the row's `s` applies to the row's cells;
@@ -438,7 +462,7 @@ fn row_tracks(
 // ── cell values ──────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind {
+pub(super) enum Kind {
     Num,
     Text,
     Bool,
@@ -559,7 +583,7 @@ impl CellSource for SheetRows<'_, '_> {
 /// the number format is what turns a serial back into a date — `Format::apply_with`
 /// performs that conversion internally for a date-kind code, which is why a bare
 /// `45678` never reaches the output.
-fn cell_text(
+pub(super) fn cell_text(
     cell: roxmltree::Node<'_, '_>,
     fmt: &Format,
     sst: &[String],
@@ -1035,6 +1059,27 @@ mod tests {
         assert!(ext.rows_clipped && ext.cols_clipped);
     }
 
+    #[test]
+    fn a_clipped_row_cannot_widen_the_column_extent() {
+        // The bug: `ncols` was folded in before the row cap was tested, so a sheet
+        // whose one wide row sits past row 200 emitted 200 columns of nothing — and
+        // said "First 200 columns only" about columns that were never dropped.
+        let over_row = super::super::MAX_ROWS + 1;
+        let wide = super::super::super::sheet::col_letter(50);
+        let xml = ws(&format!(
+            "<sheetData>\
+               <row r=\"1\"><c r=\"A1\"><v>1</v></c></row>\
+               <row r=\"{over_row}\"><c r=\"A{over_row}\"><v>2</v></c>\
+                 <c r=\"{wide}{over_row}\"><v>3</v></c></row>\
+             </sheetData>"
+        ));
+        let doc = xml::parse(&xml).unwrap();
+        let ext = used_extent(doc.root_element(), &Styles::empty());
+        assert_eq!((ext.last_row, ext.ncols), (1, 1));
+        assert!(ext.rows_clipped, "the row itself is clipped");
+        assert!(!ext.cols_clipped, "no drawn column was dropped");
+    }
+
     // ── columns ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -1057,6 +1102,24 @@ mod tests {
         // Untouched columns take the sheet default, rounded to a whole pixel.
         assert_eq!(cols[4].px, DEF_COL);
         assert!(!cols[4].hidden && cols[4].style.is_none());
+    }
+
+    #[test]
+    fn an_overlapping_col_definition_changes_only_what_it_states() {
+        // The asymmetry this fixes: an omitted `width` was preserved but an omitted
+        // `hidden`/`style` was reset, so the sheet-wide definition that normally
+        // follows a narrow one silently unhid a hidden column.
+        let xml = ws("<cols>\
+             <col min=\"1\" max=\"1\" hidden=\"1\" style=\"7\"/>\
+             <col min=\"1\" max=\"3\" width=\"20\"/>\
+             </cols>");
+        let doc = xml::parse(&xml).unwrap();
+        let cols = parse_cols(doc.root_element(), chars_to_px(DEFAULT_COL_CHARS));
+        assert_eq!(cols[0].px, 145.0, "the later width applies");
+        assert!(cols[0].hidden, "and does not unhide the column");
+        assert_eq!(cols[0].style, Some(7), "nor drop its default xf");
+        // A column the first definition never covered keeps its own defaults.
+        assert!(!cols[1].hidden && cols[1].style.is_none());
     }
 
     #[test]
@@ -1096,5 +1159,21 @@ mod tests {
             assert_eq!((s.frozen_rows, s.frozen_cols), want, "state={state}");
             assert!(!s.show_lines);
         }
+    }
+
+    #[test]
+    fn a_zero_height_row_keeps_a_sliver() {
+        // The row equivalent of MIN_COL_PX: `ht="0"` emitted a genuinely 0px <tr>,
+        // and a zero-size track is what MIN_COL_PX exists to prevent — the gutter
+        // and the grid disagree about where the row edge is.
+        let xml = ws("<sheetData><row r=\"1\" ht=\"0\" customHeight=\"1\"/>\
+             <row r=\"2\" ht=\"-4\"/></sheetData>");
+        let doc = xml::parse(&xml).unwrap();
+        let nodes = row_lookup(doc.root_element(), 2);
+        let rows = row_tracks(&nodes, 2, pt_to_px(DEFAULT_ROW_PT).round());
+        assert_eq!(rows[1].px, MIN_ROW_PX);
+        assert_eq!(rows[2].px, MIN_ROW_PX);
+        // A row the sheet really hides says so, and that is what drops the track.
+        assert!(!rows[1].hidden);
     }
 }

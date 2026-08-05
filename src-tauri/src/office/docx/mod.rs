@@ -27,6 +27,7 @@ use super::highlight::{Marker, Terms};
 use super::html::{attr, dxa_to_px, Writer};
 use super::media::{MediaBudget, MediaCache};
 use super::pkg::{self, Budget, Zip};
+use super::text::Section;
 use super::xml::{child, elems};
 use super::{opc, xml, OfficeDoc, Shape};
 use numbering::Numbering;
@@ -308,6 +309,25 @@ fn render_with(
         truncated,
         notes: notes.into_vec(),
     })
+}
+
+// ── content index ────────────────────────────────────────────────────────────
+
+/// Flat text for the content index: one section, the main document part.
+///
+/// The renderer draws exactly this part — headers, footers and comments are not
+/// drawn (see the notes footer), so indexing them would put hits in a document
+/// where no highlight can ever land. Footnote bodies *are* drawn, in the tail
+/// block, but they live in `footnotes.xml` and are left for a later pass rather
+/// than half-indexed.
+pub(super) fn extract_sections(path: &str) -> Result<Vec<Section>, String> {
+    let mut zip = pkg::open_zip(path)?;
+    let mut budget = Budget::new();
+    let part = opc::root_part(&mut zip, &mut budget, "word/document.xml");
+    let doc_xml = pkg::read_entry(&mut zip, &part, &mut budget)?
+        .ok_or_else(|| format!("docx: missing document part ({part})"))?;
+    let text = xml::xml_text(&doc_xml, &["p"], &["t"])?;
+    Ok(vec![Section::new("", text)])
 }
 
 /// A companion part of the main document: the relationship of `kind` if the
@@ -1517,5 +1537,35 @@ mod tests {
         let doc = super::render(f.path(), None, &["café".to_string()]).expect("render");
         assert!(!doc.html.contains("café"), "{}", doc.html);
         assert!(doc.best_mark_id.is_none(), "{:?}", doc.best_mark_id);
+    }
+
+    // ── content index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn a_document_indexes_as_one_unnamed_section() {
+        let f = docx("index-one", &para("", &run("café")), &[]);
+        let sections = extract_sections(f.path()).expect("extract");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].name, "");
+        // One section means no separator in the flat text, so the index stores a
+        // single row and `best_section` answers 0.
+        assert_eq!(sections[0].text, "café");
+        assert!(!sections[0].text.contains(super::super::SECTION_SEP));
+    }
+
+    #[test]
+    fn tabs_and_breaks_separate_indexed_words() {
+        // The recall bug this fixes: `w:tab` and `w:br` carry no characters, so
+        // emitting nothing for them turned a tab-separated row into one token no
+        // query could match.
+        let body = format!(
+            "{}{}",
+            para("", "<w:r><w:t>café</w:t><w:tab/><w:t>naïve</w:t></w:r>"),
+            para("", "<w:r><w:t>one</w:t><w:br/><w:t>two</w:t></w:r>"),
+        );
+        let f = docx("index-tab", &body, &[]);
+        let text = &extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("café naïve"), "{text:?}");
+        assert!(text.contains("one two"), "{text:?}");
     }
 }

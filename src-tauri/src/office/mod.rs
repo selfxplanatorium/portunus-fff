@@ -1,5 +1,5 @@
 //! Office document reading (docx/pptx/xlsx and the ODF equivalents): flat text
-//! for the content index, Markdown and spreadsheet grids for the preview.
+//! for the content index, and styled HTML for the preview.
 
 mod cellstyle;
 mod docshape;
@@ -7,12 +7,10 @@ mod docx;
 mod drawingml;
 mod emit;
 mod fonts;
-mod grid;
 mod highlight;
 mod html;
 mod link;
 mod listnum;
-mod markdown;
 mod media;
 mod model;
 mod numfmt;
@@ -27,9 +25,7 @@ mod text;
 mod xlsx;
 mod xml;
 
-pub use grid::extract_spreadsheet_grid;
-pub use markdown::extract_office_markdown;
-pub use text::extract_office_text;
+pub use text::{extract_office_text, SECTION_SEP};
 
 pub const OFFICE_EXTENSIONS: &[&str] = &["docx", "pptx", "xlsx", "odt", "ods", "odp"];
 

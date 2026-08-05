@@ -1723,4 +1723,62 @@ pub(super) mod tests {
             doc.html
         );
     }
+
+    // ── content index ───────────────────────────────────────────────────────
+
+    #[test]
+    fn a_text_document_indexes_as_one_unnamed_section() {
+        let f = body("index-one", "<text:p>café</text:p><text:h>naïve</text:h>");
+        let sections = crate::office::odf::extract_sections(f.path()).expect("extract");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].name, "");
+        assert!(sections[0].text.contains("café"), "{:?}", sections[0].text);
+        assert!(sections[0].text.contains("naïve"), "{:?}", sections[0].text);
+    }
+
+    #[test]
+    fn tabs_and_line_breaks_separate_indexed_words() {
+        // `text:tab` and `text:line-break` are elements, never characters. Emitting
+        // nothing for them fused the words on either side into one token.
+        let f = body(
+            "index-tab",
+            "<text:p>café<text:tab/>naïve</text:p>\
+             <text:p>one<text:line-break/>two</text:p>",
+        );
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("café naïve"), "{text:?}");
+        assert!(text.contains("one two"), "{text:?}");
+    }
+
+    #[test]
+    fn table_cells_do_not_fuse_into_one_token() {
+        let f = body(
+            "index-cells",
+            "<table:table table:name=\"T\"><table:table-row>\
+             <table:table-cell><text:p>café</text:p></table:table-cell>\
+             <table:table-cell><text:p>naïve</text:p></table:table-cell>\
+             </table:table-row></table:table>",
+        );
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(!text.contains("cafénaïve"), "{text:?}");
+    }
+
+    #[test]
+    fn deleted_text_and_comments_are_not_indexed() {
+        // Neither is drawn: `text:tracked-changes` holds the deleted side of a
+        // change and `office:annotation` a comment Word and Writer both keep out of
+        // the page. A hit in either could never be highlighted.
+        let f = body(
+            "index-skip",
+            "<text:tracked-changes><text:changed-region><text:deletion>\
+             <text:p>deleted-café</text:p></text:deletion></text:changed-region>\
+             </text:tracked-changes>\
+             <text:p>kept<office:annotation><text:p>comment-naïve</text:p>\
+             </office:annotation></text:p>",
+        );
+        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        assert!(text.contains("kept"), "{text:?}");
+        assert!(!text.contains("deleted-café"), "{text:?}");
+        assert!(!text.contains("comment-naïve"), "{text:?}");
+    }
 }

@@ -146,9 +146,10 @@ struct StoredMeta {
 struct FileUpdate {
     path: String,
     text: String,
-    /// Per-page text for PDFs (split on form-feed). `None` for non-paged formats.
-    /// Populated into `pdf_page_fts` so previews can open on the matched page.
-    pages: Option<Vec<String>>,
+    /// Per-section text: a PDF's pages, an office document's sheets or slides.
+    /// `None` for a format with one section (plain text, an image). Populated into
+    /// `section_fts` so a preview can open on the section that matched.
+    sections: Option<Vec<String>>,
     /// OCR word boxes for an image, captured only when `ocr_highlight_cache` is on.
     /// Empty otherwise. Written to `ocr_word_box` so previews skip per-open OCR.
     boxes: Vec<OcrWord>,
@@ -172,7 +173,9 @@ impl ContentIndex {
         // every table and recreates them, which triggers a one-time full reindex.
         //   v2: added `pdf_page_fts` (per-page PDF text, for match-page preview).
         //   v3: `ocr_word_box` gained `line`; `word` now keeps original case.
-        const SCHEMA_VERSION: i64 = 3;
+        //   v4: `pdf_page_fts` → `section_fts` (`page` → `section`), now also
+        //       holding an office document's per-sheet / per-slide text.
+        const SCHEMA_VERSION: i64 = 4;
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap_or(0);
@@ -181,6 +184,7 @@ impl ContentIndex {
                 "DROP TABLE IF EXISTS file_meta;
                  DROP TABLE IF EXISTS content_fts;
                  DROP TABLE IF EXISTS pdf_page_fts;
+                 DROP TABLE IF EXISTS section_fts;
                  DROP TABLE IF EXISTS ocr_word_box;",
             )?;
         }
@@ -199,9 +203,9 @@ impl ContentIndex {
                  text,
                  tokenize='porter unicode61'
              );
-             CREATE VIRTUAL TABLE IF NOT EXISTS pdf_page_fts USING fts5(
+             CREATE VIRTUAL TABLE IF NOT EXISTS section_fts USING fts5(
                  path UNINDEXED,
-                 page UNINDEXED,
+                 section UNINDEXED,
                  text,
                  tokenize='porter unicode61'
              );
@@ -240,7 +244,7 @@ impl ContentIndex {
 
     fn delete_path(conn: &rusqlite::Connection, path: &str) -> rusqlite::Result<usize> {
         let mut n = 0;
-        for tbl in ["content_fts", "pdf_page_fts", "ocr_word_box", "file_meta"] {
+        for tbl in ["content_fts", "section_fts", "ocr_word_box", "file_meta"] {
             n += conn.execute(&format!("DELETE FROM {tbl} WHERE path = ?"), [path])?;
         }
         Ok(n)
@@ -249,7 +253,7 @@ impl ContentIndex {
     fn delete_prefix(conn: &rusqlite::Connection, pattern: &str) -> rusqlite::Result<usize> {
         // content_fts deletions are the reported count (the others mirror it).
         let removed = conn.execute("DELETE FROM content_fts WHERE path LIKE ?", [pattern])?;
-        for tbl in ["pdf_page_fts", "ocr_word_box", "file_meta"] {
+        for tbl in ["section_fts", "ocr_word_box", "file_meta"] {
             conn.execute(&format!("DELETE FROM {tbl} WHERE path LIKE ?"), [pattern])?;
         }
         Ok(removed)
@@ -271,20 +275,23 @@ impl ContentIndex {
             // nothing (e.g. an OCR'd screenshot with no detectable text) or errored.
             // We still write its file_meta below so the mtime+size skip catches it
             // next run instead of re-extracting it every startup - but we skip the
-            // content_fts/pdf_page_fts inserts so it never surfaces in search.
+            // content_fts/section_fts inserts so it never surfaces in search.
             if !u.text.trim().is_empty() {
                 tx.execute(
                     "INSERT INTO content_fts(path, text) VALUES (?, ?)",
                     params![u.path, u.text],
                 )?;
-                if let Some(pages) = &u.pages {
-                    for (i, page) in pages.iter().enumerate() {
-                        if page.trim().is_empty() {
+                if let Some(sections) = &u.sections {
+                    for (i, sec) in sections.iter().enumerate() {
+                        // An empty section still holds its index: `i` is the
+                        // renderer's section number, so a blank slide is skipped
+                        // here without shifting the ones after it.
+                        if sec.trim().is_empty() {
                             continue;
                         }
                         tx.execute(
-                            "INSERT INTO pdf_page_fts(path, page, text) VALUES (?, ?, ?)",
-                            params![u.path, i as i64, page],
+                            "INSERT INTO section_fts(path, section, text) VALUES (?, ?, ?)",
+                            params![u.path, i as i64, sec],
                         )?;
                     }
                 }
@@ -381,14 +388,15 @@ impl ContentIndex {
         Ok(())
     }
 
-    /// Page index (0-based) of the best-matching page of a PDF for `fts_query`,
-    /// or `None` if the file has no indexed pages or no page matched.
+    /// Section index (0-based) of the best-matching section for `fts_query`, or
+    /// `None` if the file has no indexed sections or none matched. A section is a
+    /// PDF page, a worksheet or a slide - whatever the preview can open on.
     ///
-    /// Ranks pages by how many *distinct* query terms they cover (so a multi-part
-    /// query lands on the page holding the most of them), and breaks ties toward the
-    /// earliest page - rather than FTS BM25, which favours shorter pages and would
-    /// e.g. pick a repeated header on the last page over the first.
-    pub fn best_page(&self, path: &str, fts_query: &str) -> Option<u32> {
+    /// Ranks sections by how many *distinct* query terms they cover (so a multi-part
+    /// query lands on the section holding the most of them), and breaks ties toward
+    /// the earliest one - rather than FTS BM25, which favours shorter sections and
+    /// would e.g. pick a repeated header on the last page over the first.
+    pub fn best_section(&self, path: &str, fts_query: &str) -> Option<u32> {
         let t_start = util::profile_search().then(std::time::Instant::now);
         let terms: Vec<String> = fts_query
             .split_whitespace()
@@ -398,7 +406,7 @@ impl ContentIndex {
             return None;
         }
         // Single OR query so this stays one FTS lookup per file (same cost as before):
-        // it returns every page carrying *any* term; we count distinct coverage in Rust.
+        // it returns every section carrying *any* term; coverage is counted in Rust.
         // Phrase-quote each term so FTS treats it literally (apostrophes etc.); doubled
         // quotes escape an embedded quote.
         let or_query = terms
@@ -410,8 +418,8 @@ impl ContentIndex {
         let db = util::lock(&self.db);
         let mut stmt = db
             .prepare(
-                "SELECT page, text FROM pdf_page_fts WHERE path = ? AND text MATCH ? \
-                 ORDER BY page",
+                "SELECT section, text FROM section_fts WHERE path = ? AND text MATCH ? \
+                 ORDER BY section",
             )
             .ok()?;
         let rows = stmt
@@ -424,29 +432,29 @@ impl ContentIndex {
         // coverage counts the same matches FTS ranked on - not a prefix guess.
         let query_keys = crate::content_match::query_keys(terms.iter().cloned());
 
-        // Pages arrive in ascending order; keep the first that strictly beats the best
-        // coverage so far - that yields max distinct terms, earliest page on ties.
-        let mut best: Option<(u32, u32)> = None; // (coverage, page)
-        for (page, text) in rows.flatten() {
-            // Key every word on the page once, then count how many distinct query
-            // keys it covers - O(words) stems per page (best_page runs once per
+        // Sections arrive in ascending order; keep the first that strictly beats the
+        // best coverage so far - max distinct terms, earliest section on ties.
+        let mut best: Option<(u32, u32)> = None; // (coverage, section)
+        for (section, text) in rows.flatten() {
+            // Key every word of the section once, then count how many distinct query
+            // keys it covers - O(words) stems per section (best_section runs once per
             // preview open, not per keystroke).
-            let page_keys: HashSet<String> = crate::content_match::tokenize(&text)
+            let keys: HashSet<String> = crate::content_match::tokenize(&text)
                 .iter()
                 .map(|(_, w)| crate::content_match::match_key(w))
                 .collect();
-            let cov = query_keys.iter().filter(|k| page_keys.contains(*k)).count() as u32;
+            let cov = query_keys.iter().filter(|k| keys.contains(*k)).count() as u32;
             if best.is_none_or(|(bc, _)| cov > bc) {
-                best = Some((cov, page as u32));
+                best = Some((cov, section as u32));
             }
         }
         if let Some(t) = t_start {
             eprintln!(
-                "[profile] content_index::best_page took={:.2}ms path={path:?}",
+                "[profile] content_index::best_section took={:.2}ms path={path:?}",
                 t.elapsed().as_secs_f64() * 1000.0,
             );
         }
-        best.map(|(_, page)| page)
+        best.map(|(_, section)| section)
     }
 
     /// Removes all entries whose path starts with `dir_path/`. Used when a directory is
@@ -477,7 +485,7 @@ impl ContentIndex {
         let db = util::lock(&self.db);
         db.execute_batch(
             "DELETE FROM content_fts;
-             DELETE FROM pdf_page_fts;
+             DELETE FROM section_fts;
              DELETE FROM ocr_word_box;
              DELETE FROM file_meta;",
         )
@@ -769,16 +777,27 @@ fn extract_text(path: &str, cfg: &ContentConfig) -> Result<(String, Vec<OcrWord>
     }
 }
 
-/// Splits extracted PDF text into per-page strings on the form-feed separators
-/// emitted by pdftotext / the OCR fallback. Returns `None` for non-PDF paths,
-/// which keeps `pdf_page_fts` PDF-only.
-fn pdf_pages(path: &str, text: &str) -> Option<Vec<String>> {
-    let is_pdf = Path::new(path)
+/// Splits extracted text into per-section strings, or `None` for a format whose
+/// preview has a single section (plain text, an image) and therefore nothing to
+/// open on.
+///
+/// One separator serves both paged formats: `pdftotext` and the OCR fallback emit
+/// a form feed between pages, and `office::extract_office_text` joins its sections
+/// with the same character (`office::SECTION_SEP`) — which is why splitting here
+/// costs nothing and cannot disagree with the extractor. Section *n* of the split
+/// is the section `office::render` draws for `section = n`.
+fn doc_sections(path: &str, text: &str) -> Option<Vec<String>> {
+    let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("pdf"))
-        .unwrap_or(false);
-    is_pdf.then(|| text.split('\u{000C}').map(|s| s.to_string()).collect())
+        .unwrap_or("")
+        .to_lowercase();
+    let paged = ext == "pdf" || crate::office::is_office_ext(&ext);
+    paged.then(|| {
+        text.split(crate::office::SECTION_SEP)
+            .map(|s| s.to_string())
+            .collect()
+    })
 }
 
 // ── background indexer ────────────────────────────────────────────────────────
@@ -884,7 +903,8 @@ pub fn estimate_dir(
     let effective_exts = extensions.unwrap_or(&cfg.extensions);
 
     // (count, total_bytes) per bucket.
-    let (mut fast, mut pdf, mut image, mut other) = ((0usize, 0u64), (0usize, 0u64), (0usize, 0u64), (0usize, 0u64));
+    let (mut fast, mut office, mut pdf, mut image, mut other) =
+        ((0usize, 0u64), (0usize, 0u64), (0usize, 0u64), (0usize, 0u64), (0usize, 0u64));
     for entry in walkdir::WalkDir::new(&dir)
         .max_depth(depth)
         .follow_links(false)
@@ -911,7 +931,9 @@ pub fn estimate_dir(
             &mut pdf
         } else if IMAGE_EXTENSIONS.contains(&ext.as_str()) {
             &mut image
-        } else if TEXT_EXTENSIONS.contains(&ext.as_str()) || crate::office::is_office_ext(&ext) {
+        } else if crate::office::is_office_ext(&ext) {
+            &mut office
+        } else if TEXT_EXTENSIONS.contains(&ext.as_str()) {
             &mut fast
         } else {
             &mut other
@@ -927,6 +949,11 @@ pub fn estimate_dir(
     // subprocess spawn plus byte cost; OCR (image, or scanned-PDF fallback) is the
     // expensive outlier and scales with image data.
     const FAST: Cost = Cost { fixed: 0.002, per_mb: 0.01 };       // read + tokenise + FTS insert
+    // An office document is a zip of XML: inflate every sheet or slide part, parse
+    // each, walk it. No subprocess and no OCR, so it sits an order of magnitude
+    // under `pdftotext` and an order over a flat text read - which is why it is its
+    // own bucket rather than priced as plain text.
+    const OFFICE: Cost = Cost { fixed: 0.004, per_mb: 0.12 };
     const PDF_TEXT: Cost = Cost { fixed: 0.04, per_mb: 0.03 };    // pdftotext subprocess
     const PDF_OCR: Cost = Cost { fixed: 0.20, per_mb: 1.50 };     // pdftoppm + tesseract per page
     const PDF_SKIP: Cost = Cost { fixed: 0.05, per_mb: 0.0 };     // no text layer, OCR off → give up
@@ -949,12 +976,14 @@ pub fn estimate_dir(
     }
     .max(1) as f64;
 
-    let base = FAST.secs(fast.0, mb(fast.1)) + OTHER.secs(other.0, mb(other.1));
+    let base = FAST.secs(fast.0, mb(fast.1))
+        + OFFICE.secs(office.0, mb(office.1))
+        + OTHER.secs(other.0, mb(other.1));
     let total_min = base + PDF_TEXT.secs(pdf.0, mb(pdf.1)) + img_cost_min;
     let total_max = base + pdf_cost_max + img_cost_max;
 
     DirEstimate {
-        total_files: fast.0 + pdf.0 + image.0 + other.0,
+        total_files: fast.0 + office.0 + pdf.0 + image.0 + other.0,
         pdf_files: pdf.0,
         image_files: image.0,
         est_secs_min: (total_min / parallelism).ceil() as u64,
@@ -1072,12 +1101,12 @@ fn collect_updates(
                 }
             }
 
-            let pages = pdf_pages(&path_str, &text);
+            let sections = doc_sections(&path_str, &text);
 
             Some(FileUpdate {
                 path: path_str,
                 text,
-                pages,
+                sections,
                 boxes,
                 mtime: *mtime,
                 size: *size,
@@ -1161,7 +1190,7 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
     }
 
     // Empty text (extract found nothing) or an extract error both write an
-    // empty-text tombstone: upsert_batch skips the content_fts/pdf_page_fts inserts
+    // empty-text tombstone: upsert_batch skips the content_fts/section_fts inserts
     // for empty text but still records file_meta, so the mtime+size fast-path skips
     // this file next time instead of re-extracting it, and it stays out of search
     // just as remove_path would leave it.
@@ -1173,8 +1202,8 @@ pub fn process_event_path(index: &Arc<ContentIndex>, path: &Path, cfg: &ContentC
             (String::new(), Vec::new())
         }
     };
-    let pages = pdf_pages(&path_str, &text);
-    match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, pages, boxes, mtime, size }]) {
+    let sections = doc_sections(&path_str, &text);
+    match index.upsert_batch(&[FileUpdate { path: path_str.clone(), text, sections, boxes, mtime, size }]) {
         Ok(()) => { eprintln!("[content] indexed {path_str}"); true }
         Err(e) => { eprintln!("[content] event upsert failed {path_str}: {e}"); false }
     }
@@ -1247,5 +1276,22 @@ mod ocr_tests {
         let (text, boxes) = parse_tsv(&tsv, 0, 0);
         assert_eq!(text, "naïve");
         assert!(boxes.is_empty());
+    }
+
+    #[test]
+    fn doc_sections_splits_every_paged_format_and_nothing_else() {
+        let text = format!("one{sep}two{sep}three", sep = crate::office::SECTION_SEP);
+        // A PDF's pages and an office document's sheets or slides are the same
+        // thing to the index, and both arrive separated by the one character
+        // `office::extract_office_text` joins with.
+        for path in ["/x/report.pdf", "/x/report.PDF", "/x/book.xlsx", "/x/deck.odp"] {
+            let got = doc_sections(path, &text).unwrap_or_else(|| panic!("{path} is paged"));
+            assert_eq!(got, ["one", "two", "three"], "{path}");
+        }
+        // A single-section format has no section to open on, so it writes no
+        // `section_fts` rows at all rather than one row per accidental form feed.
+        for path in ["/x/notes.txt", "/x/photo.png", "/x/main.rs"] {
+            assert!(doc_sections(path, &text).is_none(), "{path}");
+        }
     }
 }
