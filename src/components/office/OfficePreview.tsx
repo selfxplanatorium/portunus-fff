@@ -45,9 +45,9 @@ export function officeRendersHtml(filename: string): boolean {
 const SLIDE_FIT = 0.98;
 
 /**
- * Slack left when fitting a page to the frame's width, in wrap px: the frame's own
- * vertical scrollbar (10px, SANDBOX_SCROLLBAR_CSS) plus a hair, so a page fitted to
- * the width does not then grow a horizontal scrollbar under itself.
+ * Slack left when fitting a page to the frame's width, in wrap px. Nothing scrolls
+ * in the frame any more, so this is no longer a scrollbar allowance - it is the
+ * breathing room that keeps a fitted page's shadow off the frame's edge.
  */
 const DOC_FIT_SLACK = 14;
 
@@ -387,7 +387,7 @@ export default function OfficePreview({
     // take it over, or the reader would undo their zoom on every layout change.
     userZoomed.current = true;
     zoomRef.current = next;
-    send({ type: "zoom", factor: next });
+    send({ type: "zoom", factor: next, anchor: "center" });
     showZoomBadge(next);
   }, [send, showZoomBadge]);
 
@@ -398,7 +398,7 @@ export default function OfficePreview({
     userZoomed.current = false;
     const z = fitRef.current > 0 ? fitRef.current : 1;
     zoomRef.current = z;
-    send({ type: "zoom", factor: z });
+    send({ type: "zoom", factor: z, anchor: "center" });
     showZoomBadge(z);
   }, [send, showZoomBadge]);
 

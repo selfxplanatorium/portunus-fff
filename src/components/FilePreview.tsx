@@ -10,6 +10,7 @@ import MarkdownView from "./MarkdownView";
 import { selection } from "../selection/controller";
 import { PdfTextLayer, OcrTextLayer } from "./TextLayer";
 import { useTermHighlight } from "../hooks/useTermHighlight";
+import { createViewEngine, type View, type Geom } from "../preview/viewEngine";
 
 /** Splits text into nodes with matched words wrapped in `<mark class="preview-hl">`.
  * Sync: requires the words to have been keyed already (`ensureKeys`). */
@@ -111,10 +112,9 @@ const PDF_SYNC_EVENT = "portunus-pdf-sync";
 const PDF_QL_FIXED_ZOOM = 0.75;
 // Quicklook zoom factor bounds and per-keystroke multiplier (1.0 = the 0.75-of-width
 // baseline, shown as 100% in the HUD). Ctrl +/- step by ZOOM_STEP; Ctrl+wheel steps finer.
-const ZOOM_MIN = 0.4;
-const ZOOM_MAX = 2;
-const ZOOM_STEP = 1.25;
-const ZOOM_WHEEL_STEP = 1.1;
+// The reader itself: bounds and per-gesture steps are policy the engine applies,
+// so nothing below multiplies a factor by hand.
+const pdfEngine = createViewEngine({ min: 0.4, max: 2, step: 1.25, wheelStep: 1.1 });
 // Pages always rasterize at this pixel width, regardless of zoom or panel size - zoom
 // is pure CSS upscaling of this one bitmap, so a page renders once and every zoom level
 // (and both the side preview and Quicklook) shares the single cache entry.
@@ -287,58 +287,27 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   const baseH = aspect > 0 && baseW > 0 ? Math.round(baseW / aspect) : 0;
   // Mirror geometry + view into refs so the wheel/key/pan handlers read the latest
   // values without re-subscribing their listeners on every zoom.
-  const geomRef = useRef({ baseW, baseH, vpW: vp.w, vpH: vp.h });
-  geomRef.current = { baseW, baseH, vpW: vp.w, vpH: vp.h };
+  const geomRef = useRef<Geom>({ cw: baseW, ch: baseH, vw: vp.w, vh: vp.h });
+  const geom: Geom = { cw: baseW, ch: baseH, vw: vp.w, vh: vp.h };
+  geomRef.current = geom;
   const viewRef = useRef(view);
   viewRef.current = view;
   // Fixed render width: the bitmap is rasterized once at PDF_RENDER_WIDTH and the
   // transform scales it. Zoom never re-renders, so the cache key is zoom-free.
   const renderWidth = PDF_RENDER_WIDTH;
 
-  // Clamp a view to its bounds: keep the page on-screen by holding each offset within
-  // its valid range (which collapses to centering only once an axis overflows). With
-  // recenterFit the axis snaps to centered whenever the page fits - used for the default
-  // / flip / resize states. Interactive zoom & pan leave it off so the cursor pivot is
-  // honored even at low zoom (otherwise a fitting page would just center-zoom).
-  const clampView = (z: number, tx: number, ty: number, g: { baseW: number; baseH: number; vpW: number; vpH: number }, recenterFit = false) => {
-    const axis = (val: number, vpLen: number, scaled: number) => {
-      if (recenterFit && scaled <= vpLen) return (vpLen - scaled) / 2;
-      const lo = Math.min(0, vpLen - scaled), hi = Math.max(0, vpLen - scaled);
-      return Math.min(hi, Math.max(lo, val));
-    };
-    return { z, tx: axis(tx, g.vpW, g.baseW * z), ty: axis(ty, g.vpH, g.baseH * z) };
-  };
+  // Every gesture is one `pdfEngine` call - the same code object the office reader
+  // runs inside its frame, so the two readers cannot drift on what a wheel tick or
+  // a Ctrl+0 means. Only the client-to-viewport conversion is this reader's own.
+  // Stable identity (refs only), so listeners don't churn.
+  const applyView = useCallback((f: (v: View, g: Geom) => View | null) => {
+    setView((prev) => f(prev, geomRef.current) ?? prev);
+  }, []);
 
-  // Zoom toward a fixed point (cursor for wheel, viewport center for keys): keep the
-  // page coordinate under the anchor invariant by adjusting the translate along with the
-  // scale, then clamp. Pure transform math - no DOM resize, no scroll - so the anchored
-  // point is exact on every frame. Stable identity (refs only), so listeners don't churn.
-  const zoomAt = useCallback(
-    (compute: (z: number) => number, clientX?: number, clientY?: number) => {
-      const g = geomRef.current;
-      const el = wrapRef.current;
-      let cx = g.vpW / 2, cy = g.vpH / 2;
-      if (el && clientX != null) {
-        const r = el.getBoundingClientRect();
-        cx = clientX - r.left;
-        cy = (clientY ?? r.top + cy) - r.top;
-      }
-      setView((prev) => {
-        const nz = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, compute(prev.z)));
-        if (nz === prev.z) return prev;
-        // Page coord under the anchor: (cursor - translate) / scale. Hold it fixed:
-        // newTranslate = cursor - pageCoord * newScale.
-        const hx = (cx - prev.tx) / prev.z;
-        const hy = (cy - prev.ty) / prev.z;
-        return clampView(nz, cx - hx * nz, cy - hy * nz, g);
-      });
-    },
-    [],
-  );
-
-  // Pan by a pixel delta (wheel scroll / drag), clamped to the page bounds.
-  const panBy = useCallback((dx: number, dy: number) => {
-    setView((prev) => clampView(prev.z, prev.tx + dx, prev.ty + dy, geomRef.current));
+  // Pointer coordinates relative to the reader's own box.
+  const localXY = useCallback((clientX: number, clientY: number) => {
+    const r = wrapRef.current?.getBoundingClientRect();
+    return r ? { x: clientX - r.left, y: clientY - r.top } : { x: clientX, y: clientY };
   }, []);
 
   // Re-clamp the view whenever the geometry changes (viewport resize, aspect arriving
@@ -346,8 +315,8 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
   useLayoutEffect(() => {
     if (!quicklook) return;
     setView((prev) => {
-      const c = clampView(prev.z, prev.tx, prev.ty, { baseW, baseH, vpW: vp.w, vpH: vp.h }, true);
-      return c.z === prev.z && c.tx === prev.tx && c.ty === prev.ty ? prev : c;
+      const c = pdfEngine.clampView(prev, geomRef.current, true);
+      return c.tx === prev.tx && c.ty === prev.ty ? prev : c;
     });
   }, [quicklook, baseW, baseH, vp.w, vp.h]);
 
@@ -373,7 +342,8 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
     flipPendingRef.current = false;
     // Clamp to fit-width and reset the pan to the page's top (h-centered). clampView
     // turns a fit-width page into tx=0, and ty=0 keeps the top in view.
-    setView((prev) => clampView(Math.min(prev.z, PDF_FIT_WIDTH_ZOOM), 0, 0, geomRef.current, true));
+    applyView((prev, g) => pdfEngine.clampView(
+      { z: Math.min(prev.z, PDF_FIT_WIDTH_ZOOM), tx: 0, ty: 0 }, g, true));
   };
   // Mark the flip during render (not in an effect) so it's set before the render effect
   // runs - the cached-swap path calls consumeFlip synchronously inside that effect.
@@ -527,18 +497,19 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
         e.stopPropagation();
         return;
       }
-      // Zoom keys: Quicklook only (the side preview is fit-to-panel). Anchored to center.
+      // Zoom keys: Quicklook only (the side preview is fit-to-panel). Anchored to
+      // center; Ctrl+0 is the engine's `reset`, so it means here what it means in
+      // the office reader.
       if (!quicklook) return;
-      if (e.key === "=" || e.key === "+") zoomAt((z) => z * ZOOM_STEP);
-      else if (e.key === "-" || e.key === "_") zoomAt((z) => z / ZOOM_STEP);
-      else if (e.key === "0") setView(() => clampView(1, 0, 0, geomRef.current, true));
-      else return;
+      const next = pdfEngine.keyZoom(viewRef.current, e.key, geomRef.current);
+      if (!next) return;
+      setView(next);
       e.preventDefault();
       e.stopPropagation();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [count, quicklook, zoomAt]);
+  }, [count, quicklook]);
 
   // Ctrl+wheel zooms toward the cursor; plain wheel pans (there's no native scrollbar -
   // the page is positioned by transform). Native non-passive listener because React's
@@ -549,19 +520,16 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      if (e.ctrlKey) {
-        const factor = e.deltaY < 0 ? ZOOM_WHEEL_STEP : 1 / ZOOM_WHEEL_STEP;
-        zoomAt((z) => z * factor, e.clientX, e.clientY);
-      } else {
-        panBy(-e.deltaX, -e.deltaY);
-      }
+      const p = localXY(e.clientX, e.clientY);
+      applyView((v, g) => pdfEngine.wheel(
+        v, { ctrl: e.ctrlKey, dx: e.deltaX, dy: e.deltaY }, p.x, p.y, g));
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [quicklook, zoomAt, panBy]);
+  }, [quicklook, applyView, localXY]);
 
   // The page overflows the reader (zoomed past fit) → grab-to-pan is meaningful.
-  const isScrollable = quicklook && (baseW * view.z > vp.w + 1 || baseH * view.z > vp.h + 1);
+  const isScrollable = quicklook && pdfEngine.overflows(view, geom);
 
   // Teardown for an in-progress pan drag, so an unmount mid-drag (file switch, Esc)
   // can't leak the window mousemove/mouseup listeners. Cleared when the drag ends.
@@ -581,7 +549,7 @@ function PdfPreview({ path, page, terms = [], highlight = true, quicklook = fals
     const start = viewRef.current;
     setGrabbing(true);
     const onMove = (ev: MouseEvent) => {
-      setView(() => clampView(start.z, start.tx + (ev.clientX - startX), start.ty + (ev.clientY - startY), geomRef.current));
+      applyView((_, g) => pdfEngine.panBy(start, ev.clientX - startX, ev.clientY - startY, g));
     };
     const cleanup = () => {
       window.removeEventListener("mousemove", onMove);

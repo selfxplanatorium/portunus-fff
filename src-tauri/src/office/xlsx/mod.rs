@@ -1081,14 +1081,14 @@ mod tests {
     }
 
     #[test]
-    fn frozen_panes_become_sticky_and_only_then_separate_borders() {
+    fn frozen_panes_are_marked_and_only_then_separate_borders() {
         let plain = single(
             "no-freeze",
             "<sheetData><row r=\"1\"><c r=\"A1\"><v>1</v></c></row></sheetData>",
             &[],
         )
         .render(None);
-        // The base stylesheet always carries the sticky rules; what must be absent
+        // The base stylesheet always carries the pinning rules; what must be absent
         // is the class that switches the table into that mode.
         assert!(!body(&plain.html).contains("xl-frozen"), "{}", plain.html);
 
@@ -1102,12 +1102,13 @@ mod tests {
             &[],
         );
         let doc = f.render(None);
-        // Sticky only works under border-collapse:separate, so the mode is opt-in.
+        // A positioned cell needs border-collapse:separate, so the mode is opt-in.
         assert!(body(&doc.html).contains("xl-frozen"), "{}", doc.html);
-        assert!(body(&doc.html).contains("fzc0"), "{}", doc.html);
-        assert!(body(&doc.html).contains("fzr1"), "{}", doc.html);
-        // The offset accounts for the row-number gutter.
-        assert!(doc.html.contains(".fzc0{left:46px;}"), "{}", doc.html);
+        // Both bands are marked, and only the bands: the pin is one --fx/--fy pair
+        // written by the frame, so nothing is emitted per track.
+        assert!(body(&doc.html).contains("xl-fzc"), "{}", doc.html);
+        assert!(body(&doc.html).contains("xl-fzr"), "{}", doc.html);
+        assert!(!doc.html.contains("fzc0"), "{}", doc.html);
         balanced(&doc.html);
     }
 

@@ -16,8 +16,8 @@
 //    own selection gesture. Positions come from `caretRangeFromPoint` instead.
 //  - **Rects, because WebKit will not paint a selection in an unfocused frame** in
 //    the host's accent - the same reason the host engine draws its own. Ours are
-//    divs in an overlay *inside* the scrolled, scaled content, so they need no
-//    recompute on scroll or zoom.
+//    divs in an overlay *inside* the transformed content, so they need no
+//    recompute when the reader pans or zooms.
 //  - **TSV, because `Range.toString()` welds cells together.** A grid selection
 //    has to come out as tab/newline separated text or it pastes back as garbage.
 //
@@ -58,10 +58,16 @@ const BLOCK_TAGS = 'P,DIV,LI,TR,TD,TH,H1,H2,H3,H4,H5,H6,BLOCKQUOTE,PRE,SECTION';
  * The engine as a function expression, for `officeBootstrap` to call with the
  * frame utilities it already owns:
  *
- *     var SEL = <script>(post, vp, hz, getZoom, wrapper, pan, setCursor);
+ *     var SEL = <script>(post, vpBox, pan, getZoom, wrapper, setCursor);
+ *
+ * `vpBox()` is the frame's viewport in *client* px - the space `getClientRects`
+ * answers in, which is what every measurement here is compared against - and
+ * `pan(dx,dy)` moves the document by a client-px delta. Neither is a scroller:
+ * the reader positions its content with one transform and nothing in this
+ * document scrolls (see the scaffold note in srcdoc.ts).
  *
  * Returns `{ msg, moved }` - `msg` handles the host's `sel*` messages, `moved` is
- * the cue that the document scrolled or zoomed under a live selection, so the
+ * the cue that the reader moved the document under a live selection, so the
  * popover anchor (which the host holds in frame-viewport coordinates) is restated.
  *
  * The body below is a template literal, so it must contain no backtick and no
@@ -73,7 +79,7 @@ export function officeSelectionScript(o: FrameSelectionOpts): string {
   const EXCL = JSON.stringify(o.exclude);
   const HOST = JSON.stringify(o.host);
   const BLOCK = JSON.stringify(BLOCK_TAGS);
-  return `(function(post,vp,hz,getZ,W,pan,setCursor){
+  return `(function(post,vpBox,pan,getZ,W,setCursor){
 var TEXT=${TEXT},EXCL=${EXCL},HOST=${HOST},BLOCK=${BLOCK};
 var PAD=14;
 
@@ -195,18 +201,12 @@ var le=function(a,b){
 };
 
 /* ── overlay ───────────────────────────────────────────────────────────────── */
-/* The overlay is parented into whatever box the content actually scrolls inside,
-   so the rects ride that scroll and the scroller's own overflow clips a selection
-   dragged out of view (a sheet keeps its grid in an inner horizontal scroller so
-   frozen panes have something to stick to). It sits below the frozen panes'
-   z-index for the same reason: they cover cells, so they must cover rects too. */
+/* The overlay is parented into the content itself - the variant's own box where it
+   has one, the zoom wrapper otherwise - so the rects ride every pan and zoom for
+   free. It sits below the frozen panes' z-index on purpose: they cover cells, so
+   they must cover rects too. */
 var ensure=function(){
   var p=HOST?document.querySelector(HOST):null;
-  if(!p){
-    var h=hz();
-    if(h===vp()||h===document.body||h===document.documentElement)p=W;
-    else p=h.firstElementChild||h;
-  }
   if(!p)p=W||document.body;
   if(ovHost!==p){
     if(ov&&ov.parentNode)ov.parentNode.removeChild(ov);
@@ -365,8 +365,9 @@ var textOf=function(r){
 /* ── publishing ────────────────────────────────────────────────────────────── */
 var last='';
 var send=function(){
+  var vb=vpBox();
   post({type:'sel',text:last,keyboard:kb,dragging:dragging,
-        anchor:anchorOf(),vw:window.innerWidth,vh:window.innerHeight});
+        anchor:anchorOf(),vw:vb.w,vh:vb.h});
 };
 var emit=function(){
   var r=cur();
@@ -379,16 +380,20 @@ var clear=function(){
   sync();emit();
 };
 
-/* ── caret scrolling ───────────────────────────────────────────────────────── */
+/* ── caret reveal ──────────────────────────────────────────────────────────── */
+/* The caret is kept a PAD inside the viewport by panning the document, not by
+   scrolling it - there is no scroller. A caret above the top means the content has
+   to come down, which is a positive dy, and the deltas are in client px because
+   that is what a caret box is measured in. */
 var reveal=function(){
   var cb=sf?caretBox(sf):null;
   if(!cb)return;
-  var v=vp(),h=hz();
-  var vh=window.innerHeight,vw=window.innerWidth;
-  if(cb.top<PAD)v.scrollTop-=PAD-cb.top;
-  else if(cb.top+cb.height>vh-PAD)v.scrollTop+=cb.top+cb.height-(vh-PAD);
-  if(cb.left<PAD)h.scrollLeft-=PAD-cb.left;
-  else if(cb.left>vw-PAD)h.scrollLeft+=cb.left-(vw-PAD);
+  var vb=vpBox(),dx=0,dy=0;
+  if(cb.top<PAD)dy=PAD-cb.top;
+  else if(cb.top+cb.height>vb.h-PAD)dy=-(cb.top+cb.height-(vb.h-PAD));
+  if(cb.left<PAD)dx=PAD-cb.left;
+  else if(cb.left>vb.w-PAD)dx=-(cb.left-(vb.w-PAD));
+  if(dx||dy)pan(dx,dy);
 };
 
 /* ── keyboard caret mode ───────────────────────────────────────────────────── */
@@ -396,7 +401,7 @@ var MOVE={ArrowLeft:['left','character'],ArrowRight:['right','character'],
           ArrowUp:['backward','line'],ArrowDown:['forward','line'],
           Home:['backward','lineboundary'],End:['forward','lineboundary']};
 var firstVisible=function(){
-  var els=document.querySelectorAll(TEXT),vh=window.innerHeight,vw=window.innerWidth,i,b,t;
+  var vb=vpBox(),els=document.querySelectorAll(TEXT),vh=vb.h,vw=vb.w,i,b,t;
   for(i=0;i<els.length;i++){
     b=els[i].getBoundingClientRect();
     if(b.bottom>0&&b.top<vh&&b.right>0&&b.left<vw){
@@ -510,16 +515,16 @@ document.addEventListener('mouseup',endDrag);
 document.addEventListener('mouseleave',endDrag);
 window.addEventListener('blur',endDrag);
 
-/* Scroll and zoom move the popover's anchor without touching the selection: the
-   rects need no recompute (they live in the scrolled, scaled content), so only the
-   anchor is restated - coalesced to one message per frame, because a wheel or a
-   trackpad emits scroll events far faster than the host can render. */
+/* A pan or a zoom moves the popover's anchor without touching the selection: the
+   rects need no recompute (they live inside the transformed content), so only the
+   anchor is restated - coalesced to one message per frame, because a trackpad
+   emits view changes far faster than the host can render. Called as moved() from
+   the reader's apply(), which is the only thing that can move the document. */
 var pending=0;
 var restate=function(){
   if(!(sa||sf||kb)||pending)return;
   pending=requestAnimationFrame(function(){pending=0;send();});
 };
-window.addEventListener('scroll',restate,true);
 
 return{
   msg:function(d){

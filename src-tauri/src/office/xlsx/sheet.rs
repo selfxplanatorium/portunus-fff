@@ -131,7 +131,6 @@ pub fn render(ctx: &mut Ctx, sh: &SheetRef) -> Result<SheetOut, String> {
     let layout = sheet::build_geometry(cols, rows, nrows, ncols);
     resolve_anchors(&mut merges, &layout.rows, &layout.cols);
     let frozen = Frozen::clamp(settings.frozen_rows, settings.frozen_cols, nrows, ncols);
-    let frozen_css = sheet::frozen_pane_css(&layout, frozen);
 
     // ── emit ────────────────────────────────────────────────────────────────
     let mut w = Writer::new(ctx.html_cap);
@@ -181,7 +180,6 @@ pub fn render(ctx: &mut Ctx, sh: &SheetRef) -> Result<SheetOut, String> {
     }
 
     w.close(); // xl-grid
-    w.close(); // xl-scroll
     w.close(); // xl-doc
 
     if extent.rows_clipped {
@@ -199,7 +197,7 @@ pub fn render(ctx: &mut Ctx, sh: &SheetRef) -> Result<SheetOut, String> {
     Ok(SheetOut {
         html: emit::wrap_style(
             sheet::BASE_CSS,
-            &sheet::collect_css(classes, &frozen_css, styles),
+            &sheet::collect_css(classes, styles),
             w.finish(),
         ),
         truncated,

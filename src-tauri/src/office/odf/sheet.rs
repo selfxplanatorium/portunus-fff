@@ -166,7 +166,6 @@ fn render_with(
     // corpus's own workbook states none. Until that part is read, no sheet claims
     // one: a wrongly frozen row is worse than none.
     let frozen = Frozen::clamp(0, 0, nrows, ncols);
-    let frozen_css = sheet::frozen_pane_css(&layout, frozen);
 
     let mut w = super::super::html::Writer::new(html_cap);
     let mut classes = sheet::Classes::default();
@@ -192,7 +191,6 @@ fn render_with(
     let missing_value = src.missing_value;
     w.close(); // table
     w.close(); // xl-grid
-    w.close(); // xl-scroll
     w.close(); // xl-doc
 
     if missing_value {
@@ -206,7 +204,7 @@ fn render_with(
     }
 
     let truncated = w.truncated() || rows.nrows > nrows || rows.ncols > ncols;
-    let css = sheet::collect_css(classes, &frozen_css, &interned);
+    let css = sheet::collect_css(classes, &interned);
     Ok(OfficeDoc {
         html: emit::wrap_style(sheet::BASE_CSS, &css, w.finish()),
         shape: Shape::Sheet,

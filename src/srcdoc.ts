@@ -13,6 +13,7 @@
 // stylesheet and the utility classes are per-consumer on purpose.
 
 import { officeSelectionScript, type FrameSelectionOpts } from './components/office/frameSelection';
+import { createViewEngine } from './preview/viewEngine';
 
 // ── shared ───────────────────────────────────────────────────────────────────
 
@@ -156,25 +157,15 @@ export interface OfficeSrcdocOpts {
 /** Wrapper the reader's zoom transform is applied to. */
 const OFFICE_ZOOM_ID = 'ozoom';
 
-/** Hidden viewport-sized probe the doc and slide scaffolds measure themselves
- *  against. */
+/** Hidden viewport-sized probe the frame measures itself against. */
 const OFFICE_VP_ID = 'ovp';
 
 /**
- * Slack left when padding a wrapper out to the viewport. A wrapper sized
- * to the exact viewport makes body exactly the viewport too, which is the size at
- * which a scrollbar's appearance shrinks the client box, shrinks the wrapper,
- * removes the scrollbar, and starts again - so the fitted state deliberately sits
- * one scrollbar short of the edge.
- */
-const OFFICE_VP_SLACK = 12;
-
-/**
- * The probe itself, for the two variants whose wrapper is padded out to the
- * viewport (doc and slide). `position:fixed` with 100% of each axis *is* the
- * viewport by construction, so its layout box is the viewport expressed in the
- * same pre-scale px the wrapper is laid out in - whatever the root's own `zoom`
- * does to the mapping between those px and painted ones.
+ * The viewport probe. `position:fixed` with 100% of each axis *is* the viewport by
+ * construction, so its layout box is the viewport expressed in the same pre-scale
+ * px the content is laid out in - and the ratio of its *client* rect to that box
+ * is how the frame converts pointer coordinates into those px, whatever the root's
+ * own `zoom` does to the mapping between them.
  */
 const OFFICE_VP_CSS =
   `#${OFFICE_VP_ID}{position:fixed;left:0;top:0;width:100%;height:100%;` +
@@ -198,6 +189,19 @@ const OFFICE_VP_CSS =
  * selection across `.of-tc` cells already copies as TSV and one across headings
  * already breaks by line.
  */
+/**
+ * The element a variant's viewport-pinned chrome lives on, if it has any: the
+ * frame publishes `--fx`/`--fy` on it - how far the content has been panned past
+ * its origin - and the renderer's own stylesheet counter-translates whatever must
+ * stay pinned (a sheet's frozen panes). Empty means the variant has none, and the
+ * bootstrap emits no pinning code at all.
+ */
+const PIN_HOSTS: Record<OfficeVariant, string> = {
+  sheet: '.xl-frozen',
+  doc: '',
+  slide: '',
+};
+
 const SELECTORS: Record<OfficeVariant, FrameSelectionOpts> = {
   sheet: { text: '.xl-t', exclude: 'th', host: '' },
   // The docx renderer wraps its page in `.of-page`. That class is the doc shape's
@@ -220,15 +224,18 @@ export function clampOfficeZoom(z: number, min = OFFICE_ZOOM_MIN): number {
 
 /**
  * Custom properties an office document may read. Deliberately narrower than
- * THEME_VARS: the *chrome* is themed (row/column headers, notes, scrollbars,
- * match highlights), the *paper* is not. A document authors its own ink and
+ * THEME_VARS: the *chrome* is themed (row/column headers, notes, match
+ * highlights), the *paper* is not. A document authors its own ink and
  * fills, and recolouring those to match the launcher's palette would
  * misrepresent the file's contents.
  */
 const OFFICE_THEME_VARS = [
   '--fg', '--fg-mute', '--fg-dim',
-  '--bg-preview', '--bg-deep', '--bg-card', '--bg-input',
+  '--bg-preview', '--bg-deep', '--bg-card',
   '--accent', '--line', '--border', '--radius-sm',
+  // The document re-applies the launcher's UI scale itself: App.css cancels it on
+  // the frame element (see `.office-frame`), and the frame's own reader converts
+  // pointer coordinates through it.
   '--ui-zoom',
 ];
 
@@ -274,132 +281,82 @@ const OFFICE_BASE_CSS =
 /**
  * Per-variant scaffold.
  *
- * The sheet variant keeps the `buildSrcdoc` invariants verbatim: body is
- * content-sized, the viewport is the only scroller, and body carries no
- * `overflow`. The page column / sheet surround sits on `--bg-preview` so the
- * scrollbar track runs over chrome rather than over paper, which is what lets
- * SANDBOX_SCROLLBAR_CSS work unmodified.
+ * Nothing here scrolls: `overflow:hidden` on html and body, and every bit of
+ * movement is the wrapper's `transform`, written by the bootstrap. Why that is not
+ * negotiable is stated once, in `preview/viewEngine`.
  *
- * `--office-zoom` is the reader's own zoom factor. It is applied as a *transform*
- * on body, not as `zoom`, and that distinction is load-bearing:
+ * Two properties of these rules are load-bearing, and both are about keeping a
+ * zoom free of layout:
  *
- * `zoom` scales computed font-size, and WebCore then re-applies its "smart
- * minimum" to the result (`computedFontSizeFromSpecifiedSize`: a size that was
- * legible before zoom is floored at `minimumLogicalFontSize`, default 9px). The
- * sheet's base font is 14.667px, so every zoom below ~0.61 produced the same 9px
- * text while the boxes around it kept shrinking - zooming out stopped doing
- * anything to the text and the grid just got cramped. WebKitGTK exposes only the
- * *hard* minimum (`minimum-font-size`, already 0); the smart minimum has no
- * public setter, so the only fix is not to route the reader's zoom through
- * font-size at all.
- *
- * `transform` is purely geometric and therefore exactly linear. The blurry-raster
- * concern that rules transforms out elsewhere applies to transforming the iframe
- * *element* (a replaced element, so its composited layer gets blitted); a
- * transform inside the document rasterizes text at the final device scale.
- *
- * The other half is that all three wrappers are *content-sized*
- * (`width:max-content`) and never sized against the viewport. A width that
- * depended on the zoom - `calc(100% / z)`, which the doc variant used to carry -
- * makes zooming relayout rather than scale: at 2x the column halves, so anything
- * fitted to it re-wraps, anything centred in it re-centres (a centred title
- * visibly slides sideways as you zoom) and anything carrying real px widths
- * overflows it. Laying out once and letting the transform do all the scaling is
- * both exactly linear and free of layout work per wheel tick.
+ *  - Every wrapper is content-sized (`width:max-content`) and never sized against
+ *    the viewport. A width that depended on the zoom - `calc(100% / z)` - makes
+ *    zooming relayout rather than scale: at 2x the column halves, so anything
+ *    fitted to it re-wraps, anything centred in it re-centres (a centred title
+ *    visibly slides sideways as you zoom) and anything carrying real px widths
+ *    overflows it. Centring a document narrower than the frame is the engine's
+ *    `recenterFit`, not a flex box.
+ *  - Reader zoom is a `transform`, not `zoom`. `zoom` scales computed font-size,
+ *    and WebCore then re-applies its "smart minimum" to the result
+ *    (`computedFontSizeFromSpecifiedSize`: a size that was legible before zoom is
+ *    floored at `minimumLogicalFontSize`, default 9px). The sheet's base font is
+ *    14.667px, so every zoom below ~0.61 produced the same 9px text while the boxes
+ *    around it kept shrinking. WebKitGTK exposes only the *hard* minimum
+ *    (`minimum-font-size`, already 0); the smart minimum has no public setter.
  *
  * The launcher's own `--ui-zoom` stays on `zoom` - it is the UI scale the rest of
  * the app uses, and it is not a per-document control.
  */
 function officeVariantCss(variant: OfficeVariant, opts: OfficeSrcdocOpts): string {
-  // The transform goes on the wrapper rather than on body: body's overflow
-  // propagates to the viewport, and a transformed body is exactly the case where
-  // that propagation gets murky. An ordinary block in between keeps the viewport
-  // an ordinary scroller.
   const root =
-    `:root{--office-zoom:${clampOfficeZoom(opts.zoom ?? 1, opts.zoomMin)};zoom:var(--ui-zoom,1)}` +
-    `body{background:var(--bg-preview)}` +
-    // `position:relative` is for the selection overlay, which parents itself here
-    // when the document has no inner scroller of its own.
-    `#${OFFICE_ZOOM_ID}{position:relative;transform-origin:0 0;transform:scale(var(--office-zoom,1))}`;
+    `:root{zoom:var(--ui-zoom,1)}` +
+    // Body is the transform's containing block and the paper's backdrop; the
+    // wrapper is positioned out of flow so its box can never feed back into body's.
+    // The transform itself is only ever written by the bootstrap, which runs before
+    // the first paint - a static opening scale here would just be a wrong frame
+    // (scaled but not yet positioned) for any paint that beat it.
+    `html,body{height:100%;overflow:hidden}` +
+    `body{background:var(--bg-preview);position:relative}` +
+    `#${OFFICE_ZOOM_ID}{position:absolute;left:0;top:0;transform-origin:0 0;` +
+    `width:max-content}` +
+    OFFICE_VP_CSS;
   switch (variant) {
     case 'sheet':
-      // No `width: calc(100% / z)` here, and that omission is the difference
-      // between a smooth zoom and an unusable one. A width that depends on the
-      // zoom dirties layout on every step, and a 1000x30 sheet is 30k cells to
-      // relay out per wheel tick; a bare transform touches no layout at all.
-      //
-      // A sheet was the first variant that could skip it, because its content is
-      // content-sized: the grid is a `table-layout:fixed` table of explicit column
-      // widths, so it never needed a percentage width to size against - and the
-      // other two turned out to be the same story. `max-content` is also
-      // free of any dependency on body's width, which matters because the
-      // bootstrap sizes body from the *scaled* wrapper (transforms do not affect
-      // layout, so without that body keeps its full unscaled box and the viewport
-      // scrolls over a blank region) - a percentage here would make that circular.
-      return root + `#${OFFICE_ZOOM_ID}{width:max-content}body{cursor:grab}`;
+      // The grid is a `table-layout:fixed` table of explicit column widths, so it
+      // is content-sized with nothing to size against.
+      return root + `body.pannable{cursor:grab}`;
     case 'doc': {
-      // Page geometry arrives as [width, padX, padY] in CSS px, centred on the
-      // chrome backdrop. `width` is the *whole* page including its margins -
-      // `box-sizing:border-box` from the base CSS is what makes the padding sit
-      // inside it, so a Letter page is 816px wide and not 816 + 2 x 96.
-      //
-      // The fallback is US Letter with 1in margins, for a document whose renderer
-      // reported no geometry at all. A renderer with asymmetric margins overrides
-      // the padding from its own stylesheet, which comes later in document order.
+      // Page geometry arrives as [width, padX, padY] in CSS px. `width` is the
+      // *whole* page including its margins - `box-sizing:border-box` from the base
+      // CSS is what makes the padding sit inside it, so a Letter page is 816px wide
+      // and not 816 + 2 x 96. The fallback is US Letter with 1in margins, for a
+      // document whose renderer reported no geometry at all. A renderer with
+      // asymmetric margins overrides the padding from its own stylesheet, which
+      // comes later in document order.
       const [w, px, py] = opts.page ?? [816, 96, 96];
-      // Content-sized exactly as the sheet and the slide are, with no
-      // zoom-dependent width: a page is the variant where relayout-instead-of-scale
-      // is *visible* rather than merely slow (see the note above the switch).
-      // Centring a page narrower than the frame, and the pan range of one zoomed
-      // past it, both come from the wrapper's *minimum* size instead, which the
-      // bootstrap sets from the measured viewport (see `pad`).
+      // Laid out once at the width the document was authored for, with no
+      // `max-width:100%`: a percentage cap is what made zoom relayout the page -
+      // shrinking it below its authored width re-centres centred paragraphs (a
+      // title slides sideways and clips as you zoom in) and pushes content that
+      // carries real px widths - a table with a px `<colgroup>` - off the paper.
       //
-      // `align-items:flex-start` because of that minimum: the default `stretch`
-      // would grow a short page to the full viewport height, and a page's bottom
-      // edge is part of reading it as paper. A document is read from the top, so
-      // there is nothing to centre vertically either.
+      // Vertical air and a shadow so the paper reads as a sheet lying on the
+      // chrome rather than as the frame's own background. Deliberately a shadow and
+      // not a border: in this UI a border means interactive.
       return (
         root +
-        `#${OFFICE_ZOOM_ID}{display:flex;align-items:flex-start;justify-content:center;` +
-        `width:max-content}` +
-        // The page is laid out once, at the width the document was authored for, and
-        // the transform does every bit of the scaling - hence no `max-width:100%`.
-        // A percentage cap is what made zoom relayout the page: shrinking it below
-        // its authored width re-centres centred paragraphs (a title slides sideways
-        // and clips as you zoom in) and pushes content that carries real px widths -
-        // a table with a px `<colgroup>` - off the paper and onto the chrome.
-        //
-        // Vertical air and a shadow so the paper reads as a sheet lying on the
-        // chrome rather than as the frame's own background. Deliberately a shadow
-        // and not a border: in this UI a border means interactive.
-        // `flex:none` for the same reason as the missing cap: a flex item's default
-        // `flex-shrink:1` is another route to a page narrower than its authored
-        // width, and this one has no zoom in it at all.
-        `.of-page{flex:none;width:${w}px;padding:${py}px ${px}px;background:#fff;color:#000;` +
-        `margin:10px 0;box-shadow:0 1px 10px rgba(0,0,0,0.3)}` +
-        OFFICE_VP_CSS
+        `.of-page{width:${w}px;padding:${py}px ${px}px;background:#fff;color:#000;` +
+        `margin:10px 0;box-shadow:0 1px 10px rgba(0,0,0,0.3)}`
       );
     }
     case 'slide':
       // A slide is a fixed canvas (the renderer emits its px size inline), so the
-      // wrapper is content-sized exactly as the sheet's is - and for the same
-      // reason: no zoom-dependent width, so a wheel tick relays out nothing.
-      //
-      // Centring and the scroll range both come from the wrapper's *minimum* size,
-      // which the bootstrap sets from the measured viewport (see `pad`): CSS cannot
-      // express "at least the viewport, in pre-scale px" without a percentage of
-      // body, and body is sized from this wrapper, which would be circular.
+      // wrapper is content-sized exactly as the sheet's is. Everything outside a
+      // text box pans, so the whole canvas offers the grab cursor and the
+      // renderer's `cursor:text` rules take it back where text is.
       return (
         root +
-        `#${OFFICE_ZOOM_ID}{display:flex;align-items:center;justify-content:center;` +
-        `width:max-content}` +
-        // The canvas keeps its authored size whatever the flex box does around it,
-        // and sits on the chrome backdrop as a sheet of paper.
-        `.pp-doc{flex:none;box-shadow:0 1px 10px rgba(0,0,0,.35)}` +
-        // Everything outside a text box pans, so the whole canvas offers the grab
-        // cursor and the renderer's `cursor:text` rules take it back where text is.
-        `body{cursor:grab}` +
-        OFFICE_VP_CSS
+        `.pp-doc{box-shadow:0 1px 10px rgba(0,0,0,.35)}` +
+        `body.pannable{cursor:grab}`
       );
   }
 }
@@ -414,28 +371,20 @@ function officeVariantCss(variant: OfficeVariant, opts: OfficeSrcdocOpts): strin
  * centres the best match *before* posting `ready`, which is the host's cue to
  * reveal the buffer - the match is on screen in the first painted frame.
  *
- * It also owns two things the host cannot reach across the frame boundary:
- * *focus custody* (a click inside a subframe moves focus there, and the host's
- * card-level `mousedown` preventDefault never sees it) and *ctrl+wheel zoom*
- * (the wheel event is delivered to the frame, not to the host).
+ * It owns the reader's whole position - pan and zoom, as one transform, over the
+ * shared view engine - and two things the host cannot reach across the frame
+ * boundary: *focus custody* (a click inside a subframe moves focus there, and the
+ * host's card-level `mousedown` preventDefault never sees it) and the *wheel*
+ * (delivered to the frame, never to the host).
  */
 function officeBootstrap(variant: OfficeVariant, opts: OfficeSrcdocOpts): string {
   const token = JSON.stringify(opts.token);
   const mark = JSON.stringify(opts.bestMarkId ?? null);
   const zoom = clampOfficeZoom(opts.zoom ?? 1, opts.zoomMin);
   const zmin = clampOfficeZoom(opts.zoomMin ?? OFFICE_ZOOM_MIN, opts.zoomMin);
-  // Every wrapper is content-sized (`width:max-content`) and so laid out
-  // independently of body's width, which is what lets body be sized from the
-  // *scaled* wrapper without going circular. All three variants therefore size
-  // body themselves - see `fit` below.
-  //
-  // Two of them need the wrapper padded out to the viewport first: a slide is
-  // centred in its letterbox, and a page is centred in the frame when it is
-  // narrower than one and needs a pan range when it is wider. Only a sheet does
-  // not - it is scrolled from its top-left corner and grows in both directions.
-  const pads = variant !== 'sheet';
   // Only slides carry fixed-size text boxes that PowerPoint shrinks text to fit.
   const autofits = variant === 'slide';
+  const pinSel = PIN_HOSTS[variant];
   return (
     `(function(){` +
     `var T=${token};` +
@@ -444,110 +393,135 @@ function officeBootstrap(variant: OfficeVariant, opts: OfficeSrcdocOpts): string
     // what authenticates traffic in the other direction.
     `var post=function(m){m.token=T;parent.postMessage(m,'*')};` +
     `var root=document.documentElement;` +
-    `var vp=function(){return document.scrollingElement||document.documentElement};` +
-    // Horizontal scrolling may not belong to the viewport: a sheet keeps its grid
-    // in an inner scroller so frozen panes have something to stick to. Bounded
-    // breadth-first walk from body rather than a class name, so this
-    // stays true for the doc and slide renderers too - and rather than
-    // querySelectorAll('*'), which on a 50k-cell sheet is not free. Depth 4
-    // because the zoom wrapper adds a level between body and the document.
-    //
-    // Overflowing content is *not* on its own enough to call something a
-    // scroller: scrollWidth reports the overflow area whatever `overflow` says,
-    // so a clipped slide shape, and worse the selection overlay itself (a 0x0 box
-    // holding rects that spill out of it by design), both answer the size test.
-    // The computed overflow is the discriminator, and it is only read for the
-    // handful of elements that got that far.
-    `var scrolls=function(e){var o=getComputedStyle(e).overflowX;` +
-    `return o==='auto'||o==='scroll';};` +
-    `var hz=function(){` +
-    `var v=vp();if(v.scrollWidth>v.clientWidth)return v;` +
-    `var q=[document.body],d=0;` +
-    `while(q.length&&d<4){var n=[];for(var i=0;i<q.length;i++){` +
-    `var c=q[i].children;for(var j=0;j<c.length;j++){` +
-    `if(c[j].scrollWidth>c[j].clientWidth+1&&scrolls(c[j]))return c[j];` +
-    `n.push(c[j]);}}` +
-    `q=n;d++;}` +
-    `return v;};` +
-    // ── zoom ──
-    // One custom property drives the wrapper's scale transform - see
-    // officeVariantCss for why it is a transform and not `zoom`. Kept in the frame
-    // rather than on the iframe element (transforming a replaced element blits its
-    // composited raster; transforming a box inside the document does not). The
-    // host mirrors the value so it survives a document swap, so every change is
-    // echoed back as `zoomed`.
     `var W=document.getElementById(${JSON.stringify(OFFICE_ZOOM_ID)});` +
     `var VP=document.getElementById(${JSON.stringify(OFFICE_VP_ID)});` +
-    `var Z=${zoom},ZMIN=${zmin},ZMAX=${OFFICE_ZOOM_MAX},raf=0;` +
-    // A transform does not affect layout, so body keeps the *unscaled* box of its
-    // content and the viewport happily scrolls over the empty difference. Sizing
-    // body to the scaled wrapper is what removes that phantom region.
-    // offsetWidth/offsetHeight are the untransformed layout box, which is exactly
-    // the number to multiply.
-    // A slide and a page are padded out to the viewport first (in pre-scale px,
-    // hence the division by Z), which is what centres a fitted canvas or a page
-    // narrower than the frame, and what gives a zoomed-in one a scroll range to pan
-    // through.
-    `var fit=function(){if(!W)return;` +
-    (pads
-      ? `if(VP){var s=${OFFICE_VP_SLACK};` +
-        `W.style.minWidth=Math.max(0,Math.floor((VP.offsetWidth-s)/Z))+'px';` +
-        `W.style.minHeight=Math.max(0,Math.floor((VP.offsetHeight-s)/Z))+'px';}`
-      : '') +
-    `var b=document.body.style;` +
-    `b.width=Math.ceil(W.offsetWidth*Z)+'px';` +
-    `b.height=Math.ceil(W.offsetHeight*Z)+'px';};` +
-    // A trackpad emits wheel events far faster than the compositor draws, so the
-    // write is coalesced to one per frame. Z is updated synchronously (and echoed
-    // straight away) so the accumulated factor and the host's badge never lag
-    // behind the gesture - only the style write waits.
-    // Declared ahead of `flush` because the zoom is one of the two things that move
-    // the selection popover's anchor without changing the selection (the other is
-    // scroll, which the engine watches itself).
-    `var SEL=null;` +
-    `var flush=function(){raf=0;root.style.setProperty('--office-zoom',String(Z));fit();` +
-    `if(SEL)SEL.moved();};` +
-    `var setZoom=function(z,rid){` +
-    `z=Math.round(Math.max(ZMIN,Math.min(ZMAX,z||1))*100)/100;` +
-    `Z=z;if(!raf)raf=requestAnimationFrame(flush);` +
-    `post({type:'zoomed',factor:z,requestId:rid});};` +
-    // The padding is measured, so it has to be re-measured when the frame is
-    // resized (panel width drag, Quicklook opening over the side preview) - or a
-    // slide's letterbox and a page's margins keep the old frame's geometry.
-    (pads
-      ? `window.addEventListener('resize',function(){if(!raf)raf=requestAnimationFrame(flush);});`
-      : '') +
-    `window.addEventListener('wheel',function(e){` +
-    `if(!e.ctrlKey)return;e.preventDefault();` +
-    `setZoom(Z*(e.deltaY<0?${OFFICE_ZOOM_STEP}:1/${OFFICE_ZOOM_STEP}));` +
+    // ── the view ──
+    // The reader's whole position is `{z,tx,ty}`, and every gesture is one call into
+    // the shared engine, stringified in from src/preview/viewEngine.ts - the same code
+    // object the PDF reader runs. It is a closure factory precisely so it can cross
+    // this boundary: a reference out of it would arrive here as a minified name that
+    // does not exist in this document. Bounds and steps are this reader's policy and
+    // are handed to the factory, so nothing below multiplies a zoom factor by hand.
+    `var V=(${String(createViewEngine)})(` +
+    `{min:${zmin},max:${OFFICE_ZOOM_MAX},` +
+    `step:${OFFICE_ZOOM_STEP},wheelStep:${OFFICE_ZOOM_STEP},snap:100});` +
+    `var view={z:${zoom},tx:0,ty:0};` +
+    // Geometry in *layout* px: the content at z=1, and the viewport. `US` is the
+    // painted-per-layout ratio (the launcher's UI scale, which this document
+    // re-applies as `zoom` on :root), with `OX`/`OY` the viewport's origin in client
+    // px - together they turn a pointer event into the space the view lives in.
+    // Measured from the fixed probe rather than assumed, because WebKitGTK hands a
+    // zoomed frame a layout viewport that disagrees with its painted box.
+    //
+    // Measured on the events that can change it and cached in between. Nothing a
+    // gesture does can: a transform does not affect layout, so the content box is
+    // fixed, and the probe follows the frame. Reading it per gesture instead would
+    // force a synchronous layout of the whole document on every wheel tick, right
+    // after `paint` dirtied it - the read-after-write thrash this reader is built to
+    // avoid.
+    `var G={cw:0,ch:0,vw:0,vh:0},US=1,OX=0,OY=0;` +
+    `var measure=function(){` +
+    `if(VP){var b=VP.getBoundingClientRect();` +
+    `G.vw=VP.offsetWidth;G.vh=VP.offsetHeight;` +
+    `US=G.vw>0?b.width/G.vw:1;OX=b.left;OY=b.top;}` +
+    `if(W){G.cw=W.offsetWidth;G.ch=W.offsetHeight;}};` +
+    // Client px in, layout px out. Deltas pass through the scale alone, points also
+    // through the viewport's origin.
+    `var ld=function(d){return d/US;};` +
+    `var lx=function(c){return (c-OX)/US;};` +
+    `var ly=function(c){return (c-OY)/US;};` +
+    // ── applying it ──
+    // One property. Scale and translate are written together, so no frame can show
+    // the content at the new scale with the old offset - the whole reason this reader
+    // stopped scrolling. Coalesced to one write per frame, because a trackpad emits
+    // gestures faster than the compositor draws and every extra write also re-runs
+    // the frozen-pane pin below. `view` itself moves synchronously, so the factor
+    // echoed to the host never lags the gesture.
+    `var SEL=null,raf=0;` +
+    (pinSel
+      // Frozen panes used to be `position:sticky`, which needs a scrollport this
+      // document no longer has. They pin instead by counter-translating: a frozen
+      // track's sticky offset was, by construction, its own natural position in the
+      // grid (see the frozen-pane note in sheet.rs), so the pin is one pair of numbers
+      // for the whole grid - how far the content has been panned past the grid's
+      // origin - rather than anything per-track. Written as custom properties on the
+      // grid, so the style invalidation is scoped to it and only happens when the
+      // value moves by a visible amount.
+      ? `var PIN=document.querySelector(${JSON.stringify(pinSel)}),PGX=0,PGY=0,PX=-1,PY=-1;` +
+        `var pin=function(){if(!PIN)return;` +
+        `var x=Math.max(0,-view.tx/view.z-PGX),y=Math.max(0,-view.ty/view.z-PGY);` +
+        `if(Math.abs(x-PX)<0.5&&Math.abs(y-PY)<0.5)return;` +
+        `PX=x;PY=y;` +
+        `PIN.style.setProperty('--fx',x+'px');PIN.style.setProperty('--fy',y+'px');};`
+      : `var pin=function(){};`) +
+    `var paint=function(){raf=0;` +
+    `W.style.transform='translate('+view.tx+'px,'+view.ty+'px) scale('+view.z+')';` +
+    // Grab is offered only where there is somewhere to pan to, as the PDF reader
+    // does with the same predicate.
+    `document.body.classList.toggle('pannable',V.overflows(view,G));` +
+    `pin();if(SEL)SEL.moved();};` +
+    `var setView=function(v){` +
+    `if(v.z===view.z&&v.tx===view.tx&&v.ty===view.ty)return;` +
+    `view=v;if(!raf)raf=requestAnimationFrame(paint);};` +
+    // ── the operations ──
+    // Nothing else in this document may move the content.
+    //
+    // The host's zoom, which is either a gesture it caught (Ctrl +/-/0 while the
+    // frame is unfocused) or an automatic re-fit. Both zoom about the middle - the
+    // engine's default anchor - and the re-fit additionally re-centres what now
+    // fits, which is the whole difference between them.
+    `var zoomTo=function(z,rid,gesture){var nv=V.zoomAt(view,z,null,null,G);` +
+    `setView(gesture?nv:V.clampView(nv,G,true));` +
+    `post({type:'zoomed',factor:view.z,requestId:rid});};` +
+    // Absolute vertical position, for Home/End. `start` is the top of the content,
+    // `end` its bottom; a number is a scroll offset, so it moves the content the
+    // other way.
+    `var goTop=function(t){setView(V.clampView({z:view.z,tx:view.tx,` +
+    `ty:t==='start'?0:t==='end'?-(G.ch*view.z):-(+t||0)},G));};` +
+    `var home=function(){setView(V.clampView({z:view.z,tx:0,ty:0},G,true));};` +
+    // A resize re-clamps and re-centres against the viewport the view was clamped
+    // against; the observer catches the content growing instead - an image that
+    // decoded late, a font that swapped.
+    `var remeasure=function(){measure();setView(V.clampView(view,G,true));};` +
+    `window.addEventListener('resize',remeasure);` +
+    `if(window.ResizeObserver)new ResizeObserver(remeasure).observe(W);` +
+    // ── input ──
+    // Ctrl+wheel zooms toward the cursor, a plain wheel pans, ctrl +/-/0 zoom about
+    // the centre - all of it the engine's, so this reader and the PDF one cannot
+    // drift on what a gesture means. Both handlers preventDefault: there is nothing
+    // here for the browser to scroll, and a ctrl+wheel left alone becomes the
+    // WebView's own zoom.
+    `var echo=function(z){if(view.z!==z)post({type:'zoomed',factor:view.z});};` +
+    `window.addEventListener('wheel',function(e){e.preventDefault();var z=view.z;` +
+    `setView(V.wheel(view,{ctrl:e.ctrlKey,dx:ld(e.deltaX),dy:ld(e.deltaY)},` +
+    `lx(e.clientX),ly(e.clientY),G));echo(z);` +
     `},{passive:false});` +
     // Backstop for the case where focus did end up inside the frame despite the
     // custody rules below - the host's own ctrl+/-/0 listener would never fire.
     `window.addEventListener('keydown',function(e){` +
-    `if(!e.ctrlKey||e.altKey||e.metaKey)return;var k=e.key;` +
-    `if(k==='='||k==='+')setZoom(Z*${OFFICE_ZOOM_STEP});` +
-    `else if(k==='-'||k==='_')setZoom(Z/${OFFICE_ZOOM_STEP});` +
-    `else if(k==='0')setZoom(1);else return;` +
-    `e.preventDefault();});` +
+    `if(!e.ctrlKey||e.altKey||e.metaKey)return;` +
+    `var nv=V.keyZoom(view,e.key,G);if(!nv)return;var z=view.z;` +
+    `setView(nv);echo(z);e.preventDefault();});` +
     // ── selection, pan, and focus custody ──
     // All three belong to one mousedown decision, so frameSelection.ts owns the
-    // handlers outright and this passes it the two things it cannot reach: how to
-    // pan (which scroller moves is a per-variant question, see `hz`) and the body
-    // cursor.
+    // handlers outright and this passes it the three things it cannot reach: the
+    // viewport box (in client px, the space its caret rects are in), how to pan, and
+    // the body cursor.
     //
     // Focus custody rides along in its mousedown handler, and is why the engine
     // hit-tests carets by hand instead of letting the browser select: the launcher
     // pins focus to the search input (App.tsx cancels every mousedown that would
     // move it), and a subframe breaks that, because its mousedown is dispatched
     // inside *this* document where the host never sees it - after which every
-    // keybind is dead. WebKit does not dispatch mousedown for scrollbar hits, so
-    // dragging a scrollbar is unaffected.
+    // keybind is dead.
     //
-    // Pan deltas are raw pointer movement, not scaled by Z: the content moves with
-    // the cursor, so the grab point stays under it whatever the zoom.
-    `SEL=${officeSelectionScript(SELECTORS[variant])}(post,vp,hz,` +
-    `function(){return Z;},W,` +
-    `function(dx,dy){vp().scrollTop-=dy;hz().scrollLeft-=dx;},` +
+    // Pan deltas arrive in client px (raw pointer movement, and caret boxes measured
+    // against the viewport) and are converted here: the content moves with the
+    // cursor, so the grab point stays under it whatever the zoom.
+    `SEL=${officeSelectionScript(SELECTORS[variant])}(post,` +
+    `function(){return{w:G.vw*US,h:G.vh*US};},` +
+    `function(dx,dy){setView(V.panBy(view,ld(dx),ld(dy),G));},` +
+    `function(){return view.z;},W,` +
     `function(c){document.body.style.cursor=c;});` +
     // …and if focus lands in the frame anyway (a route preventDefault does not
     // cover, e.g. the frame being tabbed into), hand it straight back.
@@ -557,16 +531,17 @@ function officeBootstrap(variant: OfficeVariant, opts: OfficeSrcdocOpts): string
     // nothing; identity comes from the sender being our parent plus the token.
     `if(e.source!==parent)return;` +
     `var d=e.data;if(!d||typeof d!=='object'||d.token!==T)return;` +
-    `var s=vp();` +
     `switch(d.type){` +
-    `case 'scrollBy':` +
-    `s.scrollTop+=(d.dy||0)+(d.pages||0)*s.clientHeight*0.9;` +
-    `if(d.dx)hz().scrollLeft+=d.dx;break;` +
-    `case 'scrollTo':` +
-    `s.scrollTop=d.top==='end'?s.scrollHeight:d.top==='start'?0:(+d.top||0);break;` +
+    // The host speaks in scroll deltas, the vocabulary its other previews scroll by;
+    // a positive dy means "further down the document", so the content goes the other
+    // way. `pages` is in viewport-heights, resolved here because the host does not
+    // know the frame's client height.
+    `case 'scrollBy':setView(V.panBy(view,-(d.dx||0),` +
+    `-((d.dy||0)+(d.pages||0)*G.vh*0.9),G));break;` +
+    `case 'scrollTo':goTop(d.top);break;` +
     `case 'hl':root.classList.toggle('hl-off',!d.on);break;` +
-    `case 'section':s.scrollTop=0;s.scrollLeft=0;break;` +
-    `case 'zoom':setZoom(+d.factor||1,d.requestId);break;` +
+    `case 'section':home();break;` +
+    `case 'zoom':zoomTo(+d.factor||1,d.requestId,d.anchor==='center');break;` +
     // Everything else is the selection engine's (selEnter / selKey / selClear).
     `default:SEL.msg(d);` +
     `}` +
@@ -579,7 +554,8 @@ function officeBootstrap(variant: OfficeVariant, opts: OfficeSrcdocOpts): string
     // property re-fits the whole box.
     //
     // The inner block is what gets measured: a bottom-anchored box overflows
-    // upwards, where scrollHeight cannot see it.
+    // upwards, where scrollHeight cannot see it. Runs before the opening view is
+    // computed, because it changes the content's height.
     (autofits
       ? `var afit=function(){` +
         `var xs=document.querySelectorAll('.pp-tb[data-af]');` +
@@ -593,12 +569,22 @@ function officeBootstrap(variant: OfficeVariant, opts: OfficeSrcdocOpts): string
         `if(c.offsetHeight<=h+1)lo=m;else hi=m;}` +
         `e.style.setProperty('--af',String(lo));}};afit();`
       : '') +
-    // Body has to be sized before the match is centred: scrollIntoView against a
-    // viewport whose scroll range is still the unscaled one lands in the wrong
-    // place.
-    `fit();` +
+    // ── the opening view ──
+    // Measured against an untransformed wrapper, so a rect read off the document is
+    // in content px directly. The best match is centred before `ready` - the host's
+    // cue to reveal the buffer - so it is on screen in the first painted frame; with
+    // no match, the document opens at its top, centred if it fits.
+    `W.style.transform='none';measure();` +
+    `var wr=W.getBoundingClientRect();` +
+    (pinSel
+      ? `if(PIN){var pr=PIN.getBoundingClientRect();` +
+        `PGX=(pr.left-wr.left)/US;PGY=(pr.top-wr.top)/US;}`
+      : '') +
     `var m=${mark};var el=m?document.getElementById(m):null;` +
-    `if(el&&el.scrollIntoView)el.scrollIntoView({block:'center',inline:'center'});` +
+    `if(el){var r=el.getBoundingClientRect();` +
+    `view=V.centerOn(view.z,(r.left-wr.left+r.width/2)/US,(r.top-wr.top+r.height/2)/US,G);}` +
+    `else view=V.clampView(view,G,true);` +
+    `paint();` +
     `post({type:'ready'});` +
     `})();`
   );
@@ -640,14 +626,15 @@ export function buildOfficeSrcdoc(
     // Order matters only in one direction: the reset and the mark styling go
     // first so the variant scaffold (and, after it, the document's own rules)
     // override them on source order rather than needing extra specificity.
+    // No scrollbar styling here, unlike the extension previews: nothing in an
+    // office document scrolls (see `officeVariantCss`).
     `<style>:root{${vars}}` +
     OFFICE_BASE_CSS +
     officeVariantCss(variant, opts) +
-    SANDBOX_SCROLLBAR_CSS +
     `</style></head><body>` +
-    // Viewport probe, for the variants whose wrapper the bootstrap pads out to the
-    // frame (see `pads`). A sheet never measures it, so it never emits it.
-    (variant === 'sheet' ? '' : `<i id="${OFFICE_VP_ID}"></i>`) +
+    // Viewport probe. Every variant measures itself against it - it is both the
+    // reader's viewport and the frame's client-to-layout px conversion.
+    `<i id="${OFFICE_VP_ID}"></i>` +
     `<div id="${OFFICE_ZOOM_ID}">${html}</div>` +
     `<script nonce="${nonce}">${officeBootstrap(variant, opts)}</script>` +
     `</body></html>`

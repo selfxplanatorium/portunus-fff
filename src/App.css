@@ -2536,8 +2536,8 @@ mark.preview-hl {
 
 /* The buffer being navigated. `visibility`, never `display:none`: display:none
    takes the frame out of layout, which lets WebKit defer the very load we are
-   trying to get out of the way, and leaves it a zero-sized viewport so the
-   in-frame scrollIntoView centres nothing. */
+   trying to get out of the way, and leaves it a zero-sized viewport for the
+   in-frame reader to compute its opening view against. */
 .office-frame.is-back {
   visibility: hidden;
   pointer-events: none;

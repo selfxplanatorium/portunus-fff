@@ -45,8 +45,8 @@ interface Props {
  *  - The back buffer is `visibility:hidden; pointer-events:none`, never
  *    `display:none`. `display:none` takes it out of layout, which lets WebKit
  *    defer its load - the exact work we are trying to do in advance - and gives
- *    it a zero-sized viewport, so `scrollIntoView` in the bootstrap centres
- *    nothing.
+ *    it a zero-sized viewport, which the bootstrap measures its opening view
+ *    against, so the best match would be centred in nothing.
  *  - Neither iframe is ever keyed by path or content. A changed key remounts the
  *    element, which destroys the painted document, which is the flash.
  */

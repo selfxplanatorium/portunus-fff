@@ -3,7 +3,7 @@
 //! [`super::sheetmodel`] fixes the vocabulary a spreadsheet is described in; this
 //! is the half that consumes it. A dialect parses its own markup into [`Track`]s,
 //! a [`Merge`] list and a [`CellSource`], calls [`build_geometry`], and from there
-//! the sticky-pane offsets, the gutter, the colgroup, the row loop and the
+//! the frozen panes, the gutter, the colgroup, the row loop and the
 //! deduplicated class tables are written once.
 //!
 //! The seam sits exactly where the last piece of markup is consumed. The only
@@ -22,12 +22,9 @@ use super::model::Align;
 use super::sheetmodel::{CellSource, Merge, Track};
 use std::collections::BTreeSet;
 
-/// Width of the row-number gutter, and height of the column-letter header.
-const ROW_HDR_PX: f32 = 46.0;
-const COL_HDR_PX: f32 = 21.0;
-
-/// Sticky offsets are generated per frozen row/column, so the count is bounded.
-/// Panes deeper than this are not sticky (and nothing else about them changes).
+/// Every frozen cell is positioned and transformed to stay pinned, so the depth of
+/// the split is bounded. Tracks past this one are not pinned (and nothing else
+/// about them changes).
 const MAX_FROZEN: usize = 16;
 
 /// Structural stylesheet.
@@ -38,7 +35,6 @@ const MAX_FROZEN: usize = 16;
 /// document-authored border and fill.
 pub const BASE_CSS: &str = "\
 .xl-doc{font-family:Carlito,Lato,sans-serif;font-size:14.6667px;line-height:1.2;color:#000;}
-.xl-scroll{overflow:auto;max-width:100%;}
 .xl-grid{position:relative;display:inline-block;}
 .xl-sheet{border-collapse:collapse;table-layout:fixed;background:#fff;border-spacing:0;}
 .xl-sheet td{padding:0 3px;vertical-align:bottom;white-space:pre;overflow:hidden;}
@@ -69,12 +65,21 @@ border:1px dashed #b0b0b0;background:#f7f7f7;color:#6b6b6b;font-size:11px;text-a
 .office-note{color:var(--fg-mute,#6b6b6b);font-size:11px;padding:6px 2px;}
 .xl-cg{width:46px;}
 td.xl-fz{background:#fff;}
+/* Frozen panes pin by counter-translating, not by `position:sticky`: the reader
+   positions the document with one transform and nothing here scrolls, so there is
+   no scrollport for sticky to stick to (see the scaffold note in srcdoc.ts). A
+   frozen track's sticky offset was always its own natural position in the grid —
+   they accumulate from the gutter in document order — so the pin is the same pair
+   of numbers for every frozen cell: how far the content has been panned past the
+   grid's origin, which the frame writes as --fx/--fy on this table. `relative` is
+   still needed for the z-index, and separate borders because a positioned cell in
+   a collapsed table is not reliably painted. */
 .xl-frozen{border-collapse:separate;}
-.xl-frozen .xl-fzr,.xl-frozen .xl-fzc{position:sticky;z-index:2;}
-.xl-frozen .xl-fzr.xl-fzc{z-index:3;}
+.xl-frozen .xl-fzr,.xl-frozen .xl-fzc{position:relative;z-index:2;}
+.xl-frozen .xl-fzc{transform:translateX(var(--fx,0px));}
+.xl-frozen .xl-fzr{transform:translateY(var(--fy,0px));}
+.xl-frozen .xl-fzr.xl-fzc{transform:translate(var(--fx,0px),var(--fy,0px));z-index:3;}
 .xl-frozen th.xl-fzr,.xl-frozen th.xl-fzc{z-index:4;}
-.fzg{left:0;}
-.fzh{top:0;}
 ";
 
 /// The sheet's style table, as emission sees it.
@@ -171,8 +176,9 @@ pub struct Frozen {
 
 impl Frozen {
     /// Frozen panes are the only reason to switch the table to separate borders
-    /// (`position:sticky` does nothing under `border-collapse:collapse`), and that
-    /// changes how adjacent borders paint — so it is opt-in per document.
+    /// (a positioned cell is not reliably painted under
+    /// `border-collapse:collapse`), and that changes how adjacent borders paint —
+    /// so it is opt-in per document.
     ///
     /// `rows`/`cols` are the split as the document stored it; where that is stored
     /// is the dialect's business (a `<pane>` in SpreadsheetML, view settings in
@@ -260,36 +266,6 @@ pub fn build_geometry(mut cols: Vec<Track>, rows: Vec<Track>, nrows: u32, ncols:
     }
 }
 
-/// One sticky offset per frozen track, accumulated behind the gutter/header
-/// chrome. The offsets ride on the *cells*, never on the `<tr>`: sticky
-/// positioning on a table row is not reliably implemented, while on a cell it is.
-pub fn frozen_pane_css(layout: &Layout, frozen: Frozen) -> String {
-    let mut css = String::new();
-    if !frozen.on() {
-        return css;
-    }
-    let mut x = ROW_HDR_PX;
-    for (vi, &c) in layout.vis_cols.iter().enumerate() {
-        if c >= frozen.cols {
-            break;
-        }
-        css.push_str(&format!(".fzc{vi}{{left:{}px;}}\n", round(x)));
-        x += layout.cols[c].px;
-    }
-    let mut y = COL_HDR_PX;
-    for r in 1..=layout.nrows {
-        if r as usize > frozen.rows {
-            break;
-        }
-        if layout.rows[r as usize].hidden {
-            continue;
-        }
-        css.push_str(&format!(".fzr{r}{{top:{}px;}}\n", round(y)));
-        y += layout.rows[r as usize].px;
-    }
-    css
-}
-
 // ── emission ─────────────────────────────────────────────────────────────────
 
 /// Opens the document wrappers and the table, then writes the `<colgroup>` and
@@ -305,7 +281,6 @@ pub fn emit_head(
     classes: &mut Classes,
 ) {
     w.open("div", &attr("class", "xl-doc"));
-    w.open("div", &attr("class", "xl-scroll"));
     w.open("div", &attr("class", "xl-grid"));
     let table_class = match (show_lines, frozen.on()) {
         (true, true) => "xl-sheet xl-lines xl-frozen",
@@ -326,18 +301,18 @@ pub fn emit_head(
     w.open("thead", "");
     w.open("tr", "");
     let corner = if frozen.on() {
-        "xl-corner xl-fzr fzh xl-fzc fzg"
+        "xl-corner xl-fzr xl-fzc"
     } else {
         "xl-corner"
     };
     w.open("th", &attr("class", corner));
     w.close();
-    for (vi, &c) in layout.vis_cols.iter().enumerate() {
+    for &c in &layout.vis_cols {
         let mut cls = String::from("xl-ch");
         if frozen.on() {
-            push_class(&mut cls, "xl-fzr fzh");
+            push_class(&mut cls, "xl-fzr");
             if c < frozen.cols {
-                push_class(&mut cls, &format!("xl-fzc fzc{vi}"));
+                push_class(&mut cls, "xl-fzc");
             }
         }
         w.open("th", &attr("class", &cls));
@@ -418,16 +393,16 @@ pub fn emit_rows(
         w.open("tr", &attr("class", &format!("xh{hid}")));
         let mut rh_cls = String::from("xl-rh");
         if frozen.on() {
-            push_class(&mut rh_cls, "xl-fzc fzg");
+            push_class(&mut rh_cls, "xl-fzc");
             if row_frozen {
-                push_class(&mut rh_cls, &format!("xl-fzr fzr{r}"));
+                push_class(&mut rh_cls, "xl-fzr");
             }
         }
         w.open("th", &attr("class", &rh_cls));
         w.text(&r.to_string());
         w.close();
 
-        for (vi, &c) in vis_cols.iter().enumerate() {
+        for &c in vis_cols {
             if covered[c] {
                 continue;
             }
@@ -460,10 +435,10 @@ pub fn emit_rows(
                 // emitted first, so a document fill still wins.
                 push_class(&mut cls, "xl-fz");
                 if c < frozen.cols {
-                    push_class(&mut cls, &format!("xl-fzc fzc{vi}"));
+                    push_class(&mut cls, "xl-fzc");
                 }
                 if row_frozen {
-                    push_class(&mut cls, &format!("xl-fzr fzr{r}"));
+                    push_class(&mut cls, "xl-fzr");
                 }
             }
 
@@ -520,11 +495,10 @@ pub fn emit_rows(
 }
 
 /// The document stylesheet, assembled once the grid has been walked.
-pub fn collect_css(classes: Classes, frozen_css: &str, styles: &dyn StyleTable) -> String {
+pub fn collect_css(classes: Classes, styles: &dyn StyleTable) -> String {
     let mut css = String::new();
     css.push_str(&classes.widths.rules("xw", "width"));
     css.push_str(&classes.heights.rules("xh", "height"));
-    css.push_str(frozen_css);
     for (i, c) in classes.num_colors.iter().enumerate() {
         css.push_str(&format!("td.xnc{i}{{color:{c};}}\n"));
     }
@@ -573,14 +547,6 @@ fn push_class(cls: &mut String, add: &str) {
         cls.push(' ');
     }
     cls.push_str(add);
-}
-
-fn round(v: f32) -> i32 {
-    if v.is_finite() {
-        v.round() as i32
-    } else {
-        0
-    }
 }
 
 /// Guards the one CSS value that comes from a parsed format code rather than
@@ -689,25 +655,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_offsets_accumulate_behind_the_gutter_and_skip_hidden_tracks() {
-        let l = three_by_three();
-        let css = frozen_pane_css(&l, Frozen { rows: 3, cols: 2 });
-        // Only column A is inside the split, and it starts past the row gutter.
-        assert_eq!(
-            css,
-            ".fzc0{left:46px;}\n.fzr1{top:21px;}\n.fzr3{top:41px;}\n",
-            "{css}"
-        );
-    }
-
-    #[test]
-    fn no_frozen_pane_emits_no_sticky_rules() {
-        let l = three_by_three();
-        assert!(frozen_pane_css(&l, Frozen { rows: 0, cols: 0 }).is_empty());
-    }
-
-    #[test]
-    fn the_frozen_split_is_clamped_to_the_grid_and_to_the_sticky_budget() {
+    fn the_frozen_split_is_clamped_to_the_grid_and_to_the_frozen_budget() {
         let f = Frozen::clamp(MAX_FROZEN + 5, 9, 100, 4);
         assert_eq!((f.rows, f.cols), (MAX_FROZEN, 4));
         assert!(f.on());

@@ -12,19 +12,38 @@
 // host to the wrong document; (2) alone would trust any window that had somehow
 // observed the token.
 
-/** Host → frame. Every message is stamped with the document's token. */
+/**
+ * Host → frame. Every message is stamped with the document's token.
+ *
+ * The scroll-shaped messages keep their names and their sign convention because
+ * that is what QuickLook's keyboard layer speaks to the previews that really do
+ * scroll (text, markdown, folders). Nothing in an office frame scrolls: the frame
+ * reads them as moves of its view transform, which is why each one is a sign flip
+ * away from what it says. Worth revisiting as a `panBy`/`goTo` reader protocol the
+ * PDF reader could also register into - it has no keyboard pan today for the same
+ * reason.
+ */
 export type HostMessage =
-  /** Relative scroll. `pages` is in viewport-heights, resolved in-frame because
-   *  the host does not know the document's client height. */
+  /** Move the document by a delta, positive `dy` being further down it. `pages` is
+   *  in viewport-heights, resolved in-frame because the host does not know the
+   *  document's client height. */
   | { type: "scrollBy"; dx?: number; dy?: number; pages?: number }
-  /** Absolute scroll; "start"/"end" saturate. */
+  /** Absolute vertical position; "start"/"end" saturate. */
   | { type: "scrollTo"; top: number | "start" | "end" }
   /** Matched-term highlighting (Ctrl+H). A class flip, so it is instant. */
   | { type: "hl"; on: boolean }
-  /** Reset to the top of the current section. */
+  /** Reset to the top-left of the current section. */
   | { type: "section" }
-  /** Reader zoom, multiplied into the launcher's own UI scale. */
-  | { type: "zoom"; factor: number; requestId?: number }
+  /**
+   * Reader zoom, multiplied into the launcher's own UI scale.
+   *
+   * `anchor: "center"` holds the point at the middle of the frame still across
+   * the step, the way the PDF reader's Ctrl +/- do. Omitted - an automatic re-fit
+   * rather than a gesture - the document keeps its top-left corner. A ctrl+wheel
+   * anchors on the cursor and never comes through here: the wheel event is
+   * delivered to the frame, which zooms itself.
+   */
+  | { type: "zoom"; factor: number; requestId?: number; anchor?: "center" }
   /** Enter keyboard caret mode (the select-mode chord). Answered with a `sel`
    *  either way, so a document with no text releases the host's adoption instead
    *  of leaving it believing a caret is live. */
