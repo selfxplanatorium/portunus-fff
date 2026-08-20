@@ -52,4 +52,5 @@ keyring = { version = "3", default-features = false, features = ["sync-secret-se
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"            # must match tao's gtk version (see Cargo.lock)
+gio = "0.18"            # .desktop launching (GDesktopAppInfo); same version gtk pulls in
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] } # wlr-layer-shell overlay; v0_6 for set_keyboard_mode

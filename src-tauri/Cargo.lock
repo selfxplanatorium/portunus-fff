@@ -4352,6 +4352,7 @@ dependencies = [
  "chrono-tz",
  "extism",
  "fend-core",
+ "gio",
  "gtk",
  "gtk-layer-shell",
  "image",

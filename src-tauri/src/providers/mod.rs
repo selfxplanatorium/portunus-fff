@@ -86,6 +86,11 @@ pub struct SearchResult {
     pub kind: String,
     pub score: f32,
     pub exec: Option<String>,
+    /// Absolute path of the `.desktop` file behind an app result. The frontend
+    /// hands it back to `launch_app`, which launches it through GIO - `exec` is
+    /// only the fallback for when that fails. Apps-provider results only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop_file: Option<String>,
     pub icon_path: Option<String>,
     /// Pre-built `data:` URI for a validated extension-supplied icon. The
     /// frontend renders it directly; never read `ext.icon` (unvalidated).
@@ -144,6 +149,7 @@ impl Default for SearchResult {
             kind: String::new(),
             score: 0.0,
             exec: None,
+            desktop_file: None,
             icon_path: None,
             icon_data_uri: None,
             file_size: None,

@@ -1038,7 +1038,7 @@ export default function App() {
     if (result.title.toLowerCase().endsWith(".pdf") && pdfView.path === fp) {
       exec = `xdg-open "file://${encodeURI(fp)}#page=${pdfView.page + 1}"`;
     }
-    invoke("launch_app", { exec, id: result.id, kind: result.kind })
+    invoke("launch_app", { exec, id: result.id, kind: result.kind, desktopFile: result.desktop_file })
       .catch(e => console.error("[launch] launch_app failed:", e));
   };
 

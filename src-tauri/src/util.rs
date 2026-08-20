@@ -68,6 +68,20 @@ where
         .spawn()
 }
 
+/// Launches a `.desktop` entry through GIO instead of re-implementing the
+/// Desktop Entry spec on top of [`spawn_detached`]. `g_app_info_launch`
+/// expands the `Exec` field codes (`%f`/`%U`/`%i`/`%c`/`%k`), honors
+/// `Terminal=true` by prepending the user's terminal, resolves a relative
+/// `Exec` against `PATH`, and - when the entry is `DBusActivatable` - activates
+/// the app over the session bus, so it never becomes our child at all.
+pub fn launch_desktop_entry(desktop_file: &str) -> Result<(), String> {
+    use gio::prelude::AppInfoExt;
+    let info = gio::DesktopAppInfo::from_filename(desktop_file)
+        .ok_or_else(|| format!("unusable desktop entry: {desktop_file}"))?;
+    info.launch(&[], gio::AppLaunchContext::NONE)
+        .map_err(|e| e.to_string())
+}
+
 /// Returns true if `bin` is found as an executable file on any PATH entry.
 /// Used both to gate providers at startup and to report dependency status
 /// to the Settings UI via `check_dependencies`.
@@ -104,4 +118,41 @@ pub fn open_sqlite_resilient(path: &Path) -> rusqlite::Result<Connection> {
         let _ = std::fs::remove_file(std::path::PathBuf::from(p));
     }
     Connection::open(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A path GIO can't turn into a desktop entry must fail *before* anything is
+    /// spawned, so `launch_app` still reaches its raw-`Exec` fallback.
+    #[test]
+    fn launch_desktop_entry_rejects_non_entries() {
+        assert!(launch_desktop_entry("/nonexistent/nope.desktop").is_err());
+    }
+
+    /// The apps provider hands GIO the absolute path of the file it parsed;
+    /// check GIO accepts that exact shape and reads the entry back. Stops short
+    /// of launching - `launch()` would start a real process.
+    #[test]
+    fn gio_reads_the_entries_the_apps_provider_emits() {
+        use gio::prelude::AppInfoExt;
+
+        let dir = std::env::temp_dir().join(format!("portunus-desktop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("org.example.Editor.desktop");
+        std::fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=Café Editor\nExec=true %F\nTerminal=false\n",
+        )
+        .unwrap();
+
+        let info = gio::DesktopAppInfo::from_filename(&path).expect("entry parsed");
+        assert_eq!(info.name(), "Café Editor");
+        // GIO owns field-code expansion, so the raw `%F` survives here and is
+        // resolved at launch time instead of being stripped by us.
+        assert_eq!(info.commandline().unwrap().to_str().unwrap(), "true %F");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 }

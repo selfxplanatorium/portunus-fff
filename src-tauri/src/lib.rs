@@ -419,25 +419,47 @@ fn split_exec(exec: &str) -> Vec<String> {
     args
 }
 
+/// Runs a result's launch action. App results carry `desktop_file` and go
+/// through GIO, which implements the Desktop Entry spec properly (field codes,
+/// `Terminal=`, D-Bus activation) - see [`util::launch_desktop_entry`]. Every
+/// other caller (file opens, clipboard URLs, preview links) passes an `exec`
+/// command line, which is tokenized here and spawned directly; that path is
+/// also the fallback when GIO refuses an entry.
 #[tauri::command]
 fn launch_app(
     app: tauri::AppHandle,
     exec: String,
     id: Option<String>,
     kind: Option<String>,
+    desktop_file: Option<String>,
     frecency: tauri::State<'_, FrecencyState>,
 ) {
     if let (Some(id), Some(kind), Some(store)) = (&id, &kind, frecency.as_ref()) {
         store.record_launch(id, kind);
     }
 
-    let args: Vec<String> = split_exec(&exec)
-        .into_iter()
-        .filter(|s| !(s.len() == 2 && s.starts_with('%')))
-        .collect();
+    let launched = match desktop_file.as_deref() {
+        Some(path) => match util::launch_desktop_entry(path) {
+            Ok(()) => true,
+            Err(e) => {
+                eprintln!("[launch] gio launch failed for {path}: {e} - falling back to Exec");
+                false
+            }
+        },
+        None => false,
+    };
 
-    if let Some((program, rest)) = args.split_first() {
-        let _ = util::spawn_detached(program, rest);
+    if !launched {
+        // Field codes only reach here on the fallback path; GIO expands them
+        // itself. Anything else (`xdg-open "…"`) has none to strip.
+        let args: Vec<String> = split_exec(&exec)
+            .into_iter()
+            .filter(|s| !(s.len() == 2 && s.starts_with('%')))
+            .collect();
+
+        if let Some((program, rest)) = args.split_first() {
+            let _ = util::spawn_detached(program, rest);
+        }
     }
 
     if let Some(window) = app.get_webview_window("main") {

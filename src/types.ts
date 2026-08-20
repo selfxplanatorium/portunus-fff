@@ -469,6 +469,9 @@ export interface SearchResult {
   kind: string;
   score: number;
   exec?: string;
+  /** Absolute path of the `.desktop` file behind an app result; passed back to
+   *  `launch_app`, which launches it via GIO (`exec` is only the fallback). */
+  desktop_file?: string;
   icon_path?: string;
   /** Pre-built `data:` URI for a validated extension-supplied icon. */
   icon_data_uri?: string;

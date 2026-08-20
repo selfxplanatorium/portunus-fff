@@ -58,6 +58,10 @@ struct DesktopEntry {
     name: String,
     #[allow(dead_code)]
     exec: String,
+    /// Absolute path of the `.desktop` file this entry came from. Handed to the
+    /// frontend so `launch_app` can launch it through GIO (field codes,
+    /// `Terminal=`, D-Bus activation) instead of spawning `exec` raw.
+    desktop_file: String,
     description: Option<String>,
     icon_path: Option<String>,
     dominant_color: Option<String>,
@@ -67,6 +71,7 @@ struct DesktopEntry {
 struct ParsedEntry {
     name: String,
     exec: String,
+    desktop_file: String,
     description: Option<String>,
     icon_name: Option<String>,
 }
@@ -184,6 +189,7 @@ fn load_apps(preferred_theme: Option<&str>) -> Vec<DesktopEntry> {
             DesktopEntry {
                 name: parsed.name.clone(),
                 exec: parsed.exec.clone(),
+                desktop_file: parsed.desktop_file.clone(),
                 description: parsed.description.clone(),
                 icon_path,
                 dominant_color,
@@ -292,6 +298,7 @@ fn parse_desktop(path: &std::path::Path, current_desktop: &str) -> Option<Parsed
     Some(ParsedEntry {
         name,
         exec,
+        desktop_file: path.to_string_lossy().into_owned(),
         description,
         icon_name,
     })
@@ -362,6 +369,7 @@ impl Provider for AppProvider {
                     subtitle: app.description.clone(),
                     kind: "app".to_string(),
                     exec: Some(app.exec.clone()),
+                    desktop_file: Some(app.desktop_file.clone()),
                     icon_path: app.icon_path.clone(),
                     dominant_color: app.dominant_color.clone(),
                     parts: Some(parts),
