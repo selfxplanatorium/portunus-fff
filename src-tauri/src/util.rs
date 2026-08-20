@@ -69,17 +69,48 @@ where
 }
 
 /// Launches a `.desktop` entry through GIO instead of re-implementing the
-/// Desktop Entry spec on top of [`spawn_detached`]. `g_app_info_launch`
-/// expands the `Exec` field codes (`%f`/`%U`/`%i`/`%c`/`%k`), honors
-/// `Terminal=true` by prepending the user's terminal, resolves a relative
-/// `Exec` against `PATH`, and - when the entry is `DBusActivatable` - activates
-/// the app over the session bus, so it never becomes our child at all.
+/// Desktop Entry spec on top of [`spawn_detached`]. GIO expands the `Exec`
+/// field codes (`%f`/`%U`/`%i`/`%c`/`%k`), honors `Terminal=true` by prepending
+/// the user's terminal, and resolves a relative `Exec` against `PATH`.
+///
+/// Detachment is ours to arrange, and it is the whole reason this does not just
+/// call `g_app_info_launch`: that convenience wrapper spawns with
+/// `G_SPAWN_DO_NOT_REAP_CHILD`, leaving the app a direct child of Portunus in
+/// Portunus' process group and session - so a SIGHUP/SIGINT to our group, or
+/// stopping Portunus from a terminal, took every launched app down with it.
+/// Instead:
+///   * `DBusActivatable` entries are activated over the session bus, where the
+///     app is a child of the bus/systemd and never ours;
+///   * everything else goes through `launch_uris_as_manager` *without*
+///     `DO_NOT_REAP_CHILD`, so glib's intermediate fork reparents the app to
+///     init, plus a post-fork `setsid()` to give it its own session and process
+///     group. Same contract as [`spawn_detached`], just spelled in glib.
 pub fn launch_desktop_entry(desktop_file: &str) -> Result<(), String> {
     use gio::prelude::AppInfoExt;
     let info = gio::DesktopAppInfo::from_filename(desktop_file)
         .ok_or_else(|| format!("unusable desktop entry: {desktop_file}"))?;
-    info.launch(&[], gio::AppLaunchContext::NONE)
-        .map_err(|e| e.to_string())
+
+    if info.boolean("DBusActivatable") {
+        return info
+            .launch(&[], gio::AppLaunchContext::NONE)
+            .map_err(|e| e.to_string());
+    }
+
+    info.launch_uris_as_manager(
+        &[],
+        gio::AppLaunchContext::NONE,
+        gio::glib::SpawnFlags::SEARCH_PATH
+            | gio::glib::SpawnFlags::STDOUT_TO_DEV_NULL
+            | gio::glib::SpawnFlags::STDERR_TO_DEV_NULL,
+        Some(Box::new(|| {
+            // Post-fork, pre-exec: async-signal-safe, so nothing but the call.
+            unsafe {
+                libc::setsid();
+            }
+        })),
+        None,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Returns true if `bin` is found as an executable file on any PATH entry.
@@ -152,6 +183,53 @@ mod tests {
         // GIO owns field-code expansion, so the raw `%F` survives here and is
         // resolved at launch time instead of being stripped by us.
         assert_eq!(info.commandline().unwrap().to_str().unwrap(), "true %F");
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The regression this path exists for: a launched app must not stay in
+    /// Portunus' session or process group, or signalling/stopping Portunus
+    /// takes it down too. The entry reports its own parent, session and group
+    /// ids; all three must differ from ours.
+    #[test]
+    fn launched_entries_are_detached_from_us() {
+        let dir = std::env::temp_dir().join(format!("portunus-detach-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("ids");
+        let path = dir.join("org.example.Detach.desktop");
+        std::fs::write(
+            &path,
+            format!(
+                "[Desktop Entry]\nType=Application\nName=Detach Probe\n                 Exec=sh -c 'ps -o ppid=,sid=,pgid= -p $$ > {}'\nTerminal=false\n",
+                out.display()
+            ),
+        )
+        .unwrap();
+
+        launch_desktop_entry(path.to_str().unwrap()).expect("launched");
+
+        let mut ids = String::new();
+        for _ in 0..100 {
+            if let Ok(s) = std::fs::read_to_string(&out) {
+                if !s.trim().is_empty() {
+                    ids = s;
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let ids: Vec<i32> = ids
+            .split_whitespace()
+            .map(|n| n.parse().expect("numeric id"))
+            .collect();
+        assert_eq!(ids.len(), 3, "probe never reported its ids");
+
+        let us = std::process::id() as i32;
+        let our_sid = unsafe { libc::getsid(0) };
+        let our_pgid = unsafe { libc::getpgid(0) };
+        assert_ne!(ids[0], us, "app is still our direct child");
+        assert_ne!(ids[1], our_sid, "app is still in our session");
+        assert_ne!(ids[2], our_pgid, "app is still in our process group");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }

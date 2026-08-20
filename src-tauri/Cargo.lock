@@ -4358,6 +4358,7 @@ dependencies = [
  "image",
  "keyring",
  "leptess",
+ "libc",
  "notify-debouncer-full",
  "nucleo-matcher",
  "pdfium-render",
