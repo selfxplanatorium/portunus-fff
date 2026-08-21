@@ -197,10 +197,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let out = dir.join("ids");
         let path = dir.join("org.example.Detach.desktop");
+        // The ids come from procfs via shell builtins rather than `ps`: build
+        // sandboxes (nix) have /bin/sh and /proc but no procps, and a missing
+        // `ps` still creates the redirect target, so the probe would look like
+        // it ran and reported nothing. Fields 4/5/6 of `stat` are ppid, pgid, sid.
         std::fs::write(
             &path,
             format!(
-                "[Desktop Entry]\nType=Application\nName=Detach Probe\n                 Exec=sh -c 'ps -o ppid=,sid=,pgid= -p $$ > {}'\nTerminal=false\n",
+                "[Desktop Entry]\nType=Application\nName=Detach Probe\nExec=/bin/sh -c 'read -r _ _ _ ppid pgid sid _ < /proc/self/stat; echo $ppid $sid $pgid > {}'\nTerminal=false\n",
                 out.display()
             ),
         )
@@ -222,7 +226,12 @@ mod tests {
             .split_whitespace()
             .map(|n| n.parse().expect("numeric id"))
             .collect();
-        assert_eq!(ids.len(), 3, "probe never reported its ids");
+        assert_eq!(
+            ids.len(),
+            3,
+            "probe never reported its ids (probe output file exists: {})",
+            out.exists()
+        );
 
         let us = std::process::id() as i32;
         let our_sid = unsafe { libc::getsid(0) };
