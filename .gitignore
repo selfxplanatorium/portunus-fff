@@ -18,6 +18,8 @@ dist-ssr
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+# Opt-in local build tweaks (mold linker); see CLAUDE.md > Build speed
+src-tauri/.cargo/
 # Bundled native assets, populated by the release workflow (see src-tauri/resources/README.md)
 src-tauri/resources/libpdfium.so
 src-tauri/resources/tessdata/

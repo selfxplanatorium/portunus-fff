@@ -2,7 +2,7 @@
 //! `xl/theme/theme1.xml`): the colour scheme and the major/minor font faces that
 //! every other DrawingML colour lookup resolves against.
 
-use crate::office::xml::{self, child, descendant};
+use crate::xml::{self, child, descendant};
 
 /// A concrete slot in `a:clrScheme`. The scheme has exactly twelve slots; the
 /// names documents actually *write* are often the mapped aliases (see

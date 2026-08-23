@@ -4,7 +4,6 @@ mod cli_ext;
 mod clipboard_ocr;
 mod config;
 mod content_index;
-mod content_match;
 mod de_setup;
 mod extensions;
 mod focus;
@@ -13,7 +12,6 @@ mod ipc;
 mod keybinds;
 mod layer_shell;
 mod native_host;
-mod office;
 mod paths;
 mod preview;
 mod provider_reload;
@@ -21,6 +19,11 @@ mod providers;
 mod runtime_assets;
 mod util;
 mod watcher;
+
+// Both live in their own crates now; the aliases keep every `crate::office::…` and
+// `crate::content_match::…` call site unchanged.
+pub(crate) use portunus_office as office;
+pub(crate) use portunus_text as content_match;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock};

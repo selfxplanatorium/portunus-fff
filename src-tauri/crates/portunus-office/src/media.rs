@@ -510,7 +510,7 @@ fn image_score(branch: Node) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::pkg::open_zip;
+    use crate::pkg::open_zip;
     use image::{ImageBuffer, Rgba};
     use std::io::Write;
     use std::path::PathBuf;
@@ -916,7 +916,7 @@ mod tests {
             <mc:Fallback><a:blip r:embed="rId4"/></mc:Fallback>
           </mc:AlternateContent>
         </root>"#;
-        let doc = crate::office::xml::parse(xml).unwrap();
+        let doc = crate::xml::parse(xml).unwrap();
         assert_eq!(
             prefer_raster_branch(alternate_content(&doc))
                 .unwrap()
@@ -932,7 +932,7 @@ mod tests {
             <mc:Fallback><v:imagedata r:id="rId2"/></mc:Fallback>
           </mc:AlternateContent>
         </root>"#;
-        let doc = crate::office::xml::parse(xml).unwrap();
+        let doc = crate::xml::parse(xml).unwrap();
         assert_eq!(
             prefer_raster_branch(alternate_content(&doc))
                 .unwrap()
@@ -949,7 +949,7 @@ mod tests {
             <mc:Fallback><w:t>Sheet1</w:t></mc:Fallback>
           </mc:AlternateContent>
         </root>"#;
-        let doc = crate::office::xml::parse(xml).unwrap();
+        let doc = crate::xml::parse(xml).unwrap();
         assert_eq!(
             prefer_raster_branch(alternate_content(&doc))
                 .unwrap()

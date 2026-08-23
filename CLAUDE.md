@@ -7,8 +7,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 bun tauri dev                                    # dev mode (hot reload)
 bun tauri build                                  # production build (OCR always on; needs libtesseract-dev + libleptonica-dev; linuxdeploy for AppImage)
-cargo check --manifest-path src-tauri/Cargo.toml # type-check Rust only
-cargo test --manifest-path src-tauri/Cargo.toml  # unit tests (inline #[cfg(test)]: breaker, calc/datetime, extensions/trigger, command)
+cargo check --manifest-path src-tauri/Cargo.toml --workspace # type-check Rust only (fastest inner loop, ~3s)
+cargo test --manifest-path src-tauri/Cargo.toml --workspace  # unit tests (inline #[cfg(test)]: breaker, calc/datetime, extensions/trigger, command, office, text)
 bun x tsc --noEmit                               # type-check TypeScript only
 ```
 
@@ -21,6 +21,31 @@ Commit style: terse, subject-only, no trailers (see `git log`). Never use the wo
 CI (`.github/workflows/release.yml`) builds the AppImage + .deb on every push/PR (uploads to a GitHub Release only on `v*` tags) using `bun tauri build --config src-tauri/tauri.bundle.conf.json`, which bundles libpdfium, poppler tools, tesseract data. A plain local `bun tauri build` produces bundles *without* those assets. On tag pushes CI also renders `packaging/aur/PKGBUILD` (a template with `@PKGVER@`/`@SHA256@` placeholders) with the built .deb's checksum and attaches it — **no manual sha256 editing**.
 
 Bundle filenames come from the **`src-tauri/Cargo.toml` `version`** field (Tauri reads it; there is no `version` in `tauri.conf.json`). Before tagging `vX.Y.Z`, bump **both** `src-tauri/Cargo.toml` and `package.json` versions to `X.Y.Z` — a mismatch makes the AUR download URL (`portunus_$pkgver_amd64.deb`) 404.
+
+## Build speed
+
+`src-tauri/` is the **workspace root** (`members = [".", "crates/*"]`), so `target/` and every CI/bundle path stay where they were. Two leaf crates are split out of the host so an edit there does not recompile them:
+
+- `crates/portunus-text` — `normalize`/`tokenize`/`stem`/`query_keys`, std-only.
+- `crates/portunus-office` — the DOCX/PPTX/XLSX/ODF stack, 38k lines, ~64% of the old host crate. Depends on `portunus-text` only.
+
+`lib.rs` aliases both back (`pub(crate) use portunus_office as office;`), so `crate::office::…` and `crate::content_match::…` paths are unchanged. Keep new bulk parsing code in these crates rather than growing the host crate again.
+
+Dependency features are trimmed deliberately — do not "restore defaults" when adding a feature:
+
+- `image` has no default features: the default set pulls `ravif`/`rav1e` (an AVIF *encoder*) plus exr/dds/hdr. Add a format explicitly if a decoder is genuinely missing.
+- `resvg` runs without `text`/`system-fonts`: dominant-color sampling only averages pixels.
+- `extism` runs with `default-features = false`, which drops wasmtime's `profiling`/`threads` and `wasm-compose`. The direct `wasmtime` dependency exists **only** to unify `wasmtime/{std,anyhow}` back on — extism's code needs `wasmtime::Error: std::error::Error`. Nothing in `src/` imports wasmtime; keep its version in step with extism's.
+- `[profile.dev]` is `debug = "line-tables-only"` + no debuginfo for dependencies. Backtraces keep `file:line`; a debugger cannot inspect variables. Raise it locally if you need gdb.
+
+The mold linker is opt-in per developer via a gitignored `src-tauri/.cargo/config.toml`:
+
+```toml
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+```
+
+Changing that file (or any profile/feature above) invalidates the whole target dir, so make such edits in one batch.
 
 ## Architecture
 
@@ -36,7 +61,7 @@ Tauri commands are registered in `lib.rs` (`invoke_handler` near the bottom list
 
 **Frecency** (`frecency.rs`) — SQLite at `$XDG_DATA_HOME/portunus/frecency.db`. Half-life exponential decay: `new_score = old_score × 2^(−elapsed_days / half_life) + 1.0`. Frecency is the *only* history signal (a separate recency bonus was removed on purpose).
 
-**Content index** (`content_index.rs`) — SQLite FTS5 (Porter stemming) over file contents; `office.rs` extracts DOCX/PPTX/XLSX/ODF text (zip-bomb caps), `content_match.rs` normalizes queries/diacritics. Stopwords are stripped from queries because FTS5 bm25 has no top-k early exit. OCR via Tesseract (`leptess`) always compiled in. Progress events: `content-index-progress { indexed, total }`. `clipboard_ocr.rs` is a separate OCR cache for clipboard images.
+**Content index** (`content_index.rs`) — SQLite FTS5 (Porter stemming) over file contents; `portunus-office` extracts DOCX/PPTX/XLSX/ODF text (zip-bomb caps), `portunus-text` normalizes queries/diacritics. Stopwords are stripped from queries because FTS5 bm25 has no top-k early exit. OCR via Tesseract (`leptess`) always compiled in. Progress events: `content-index-progress { indexed, total }`. `clipboard_ocr.rs` is a separate OCR cache for clipboard images.
 
 **Config** (`config.rs`, defaults in `default_config.toml`) — TOML at `~/.config/portunus/config.toml`. Hot-reloaded via `watcher.rs`; `provider_reload.rs` rebuilds affected providers and emits `search-invalidated`. Pre-release project: breaking config-schema changes are fine, no migration code needed.
 

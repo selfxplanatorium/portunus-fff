@@ -635,7 +635,7 @@ fn padding_css(s: &mut Style, m: &CellMargins) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::docx::style::Styles;
+    use crate::docx::style::Styles;
 
     const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
 
@@ -653,21 +653,21 @@ mod tests {
             &theme,
         );
         let mut numbering = super::super::numbering::Numbering::empty();
-        let terms = crate::office::highlight::Terms::new(&[]);
-        let mut marker = crate::office::highlight::Marker::new();
-        let mut notes = crate::office::emit::Notes::new();
+        let terms = crate::highlight::Terms::new(&[]);
+        let mut marker = crate::highlight::Marker::new();
+        let mut notes = crate::emit::Notes::new();
         let src = format!("<w:body {NS}>{tbl}</w:body>");
-        let doc = crate::office::xml::parse(&src).expect("fixture parses");
+        let doc = crate::xml::parse(&src).expect("fixture parses");
         let mut w = Writer::new(1 << 20);
         // A `Ctx` carries the media path, which is file-backed, so even a table
         // rendered on its own needs a package behind it. No fixture here
         // references an image, so it can be empty.
-        let pkg = crate::office::pkg::TestPkg::new("tbl", &[]);
+        let pkg = crate::pkg::TestPkg::new("tbl", &[]);
         let mut zip = pkg.open();
-        let mut budget = crate::office::pkg::Budget::new();
-        let mut media = crate::office::media::MediaCache::new();
-        let mut mb = crate::office::media::MediaBudget::new();
-        let rels = crate::office::opc::Rels::new();
+        let mut budget = crate::pkg::Budget::new();
+        let mut media = crate::media::MediaCache::new();
+        let mut mb = crate::media::MediaBudget::new();
+        let rels = crate::opc::Rels::new();
         let note_store = super::super::notes::Store::default();
         let mut ctx = Ctx {
             zip: &mut zip,

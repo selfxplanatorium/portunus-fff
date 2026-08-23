@@ -1,0 +1,15 @@
+[package]
+name = "portunus-office"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "DOCX/PPTX/XLSX/ODF text extraction and HTML rendering"
+
+[dependencies]
+portunus-text = { path = "../portunus-text" }
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+base64 = "0.22"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Same feature set as the host crate so unification adds nothing.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "rayon"] }

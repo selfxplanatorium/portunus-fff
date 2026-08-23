@@ -400,7 +400,7 @@ fn default_tab_px(settings_xml: Option<&str>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::pkg::TestPkg;
+    use crate::pkg::TestPkg;
 
     const NS: &str = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" \
          xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" \
@@ -1109,7 +1109,7 @@ mod tests {
             None,
             &[],
             HTML_CAP,
-            crate::office::media::MediaBudget::with_caps(1 << 20, 64),
+            crate::media::MediaBudget::with_caps(1 << 20, 64),
         )
         .expect("render");
         let html = body_html(&doc).to_string();
@@ -1118,7 +1118,7 @@ mod tests {
         assert!(html.contains("image budget reached"), "{html}");
         // The footer note is the one `media.rs` owns, once for the document.
         assert!(
-            doc.notes.iter().any(|n| n == crate::office::media::NOTE_BUDGET),
+            doc.notes.iter().any(|n| n == crate::media::NOTE_BUDGET),
             "{:?}",
             doc.notes
         );

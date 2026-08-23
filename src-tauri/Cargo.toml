@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/*"]
+resolver = "2"
+
 [package]
 name = "portunus"
 version = "0.6.1"
@@ -11,11 +15,21 @@ edition = "2021"
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "portunus_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [profile.release]
 lto = "thin"          # cross-crate inlining; "thin" keeps build time sane vs "fat"
 codegen-units = 1     # better optimization at cost of slower compile
+
+[profile.dev]
+# Backtraces keep file:line; variable inspection in a debugger is gone. Cuts the
+# debug binary from ~750 MB to tens of MB, which is most of the incremental
+# relink cost of the dev loop.
+debug = "line-tables-only"
+split-debuginfo = "unpacked"   # DWARF stays in the .o files instead of being copied into the binary
+
+[profile.dev.package."*"]
+debug = false                  # no debuginfo for the 800+ dependency crates
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -31,8 +45,15 @@ fend-core = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 chrono-tz = { version = "0.10", default-features = false }
 pdfium-render = { version = "0.8", features = ["image"] }
-image = "0.25"
-resvg = "0.44"          # pure-Rust SVG rasterizer for dominant-color sampling of svg icons
+# No `default-features`: the default format set pulls ravif -> rav1e (an AVIF
+# *encoder*, one of the slowest crates in the tree) plus exr/dds/hdr/qoi, none of
+# which are icon or document formats. pdfium-render already takes image with
+# default-features = false, so this line is the only thing that pulled them in.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "rayon"] }
+# Dominant-color sampling only averages pixels, so the usvg text stack (fontdb,
+# rustybuzz, ttf-parser, fontconfig-parser) is dead weight; `raster-images` stays
+# so svg icons that embed a png/jpeg still sample correctly.
+resvg = { version = "0.44", default-features = false, features = ["raster-images"] } # pure-Rust SVG rasterizer for dominant-color sampling of svg icons
 base64 = "0.22"         # decode extension-supplied icon bytes for dominant-color sampling
 roxmltree = "0.20"
 toml = "1"
@@ -41,8 +62,20 @@ rayon = "1"
 leptess = "0.14"
 notify-debouncer-full = "0.3"
 zip = { version = "2", default-features = false, features = ["deflate"] }
-extism = "1.30.0"
+# extism already pins the wasmtime features it needs (cranelift, cache, gc,
+# coredump, wat, parallel-compilation, pooling-allocator, demangle) with
+# default-features = false. Its default `wasmtime-default-features` adds
+# component-model/async/profiling/threads on top - wasm-compose,
+# fxprof-processed-profile, component macros - none of which the host uses.
+extism = { version = "1.30.0", default-features = false, features = ["http", "register-http", "register-filesystem"] }
+# Only here to unify `wasmtime/std` back on: extism's code needs `wasmtime::Error`
+# to implement std::error::Error, which the default-feature set provided. Keep the
+# version in step with extism's wasmtime requirement.
+wasmtime = { version = "43", default-features = false, features = ["std", "anyhow"] }
 portunus-ext-sdk = { path = "../extension-sdk", default-features = false }
+# Split out so an edit in the host does not recompile 38k lines of office parsing.
+portunus-office = { path = "crates/portunus-office" }
+portunus-text = { path = "crates/portunus-text" }
 tokio = { version = "1", features = ["sync"] }   # oneshot reply for the pdfium worker (already in tree via tauri)
 sha2 = "0.11.0"
 ureq = { version = "2", default-features = false, features = ["tls"] }

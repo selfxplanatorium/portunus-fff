@@ -8,8 +8,8 @@
 //! preview, but the hex output is not bit-exact with PowerPoint and is not meant
 //! to be.
 
-use crate::office::drawingml::theme::{self, ClrMap, SchemeSlot, Theme};
-use crate::office::xml::{self, child, elems};
+use crate::drawingml::theme::{self, ClrMap, SchemeSlot, Theme};
+use crate::xml::{self, child, elems};
 
 /// Every percentage-typed `val` in this family is thousandths of a percent:
 /// `val="60000"` is 60%.

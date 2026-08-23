@@ -3,7 +3,7 @@
 //! are in the document's first painted frame instead of appearing once a JS pass
 //! has walked the DOM.
 //!
-//! Matching goes through [`crate::content_match`], which mirrors the content
+//! Matching goes through [`portunus_text`], which mirrors the content
 //! index's FTS5 `porter unicode61` tokenizer. That is not an implementation
 //! detail to swap out: if this module keyed words differently, the preview would
 //! highlight words the search never matched (and skip the ones it did). Stemming
@@ -19,7 +19,7 @@
 #![allow(dead_code)] // Consumed by the later-stage renderers.
 
 use super::html::esc_text;
-use crate::content_match::{match_key, query_keys, tokenize};
+use portunus_text::{match_key, query_keys, tokenize};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
@@ -89,7 +89,7 @@ impl Terms {
     }
 
     /// The keys actually matched against — i.e. whatever
-    /// `content_match::query_keys` produced.
+    /// `portunus_text::query_keys` produced.
     pub fn keys(&self) -> &[String] {
         &self.keys
     }
@@ -151,7 +151,7 @@ impl Marker {
     /// match offsets breaks, because one `&` becomes `&amp;` and shifts every
     /// later byte offset so the marks land on the wrong slice; marking first and
     /// escaping afterwards breaks, because it escapes the `<mark>` tags we just
-    /// wrote. So the token byte ranges from `content_match::tokenize` (which
+    /// wrote. So the token byte ranges from `portunus_text::tokenize` (which
     /// walks `char_indices` and therefore only ever yields char boundaries) cut
     /// the original text into gap and token segments, and each segment is escaped
     /// as it is appended.
@@ -277,11 +277,11 @@ mod tests {
     fn matching_agrees_with_the_index_stemmer() {
         // The whole point of the module: "run" must highlight "running", because
         // that is what porter-stemmed FTS5 matched. The keys really come out of
-        // content_match, not from a local approximation.
+        // portunus_text, not from a local approximation.
         let t = terms(&["run"]);
         assert_eq!(
             t.keys(),
-            crate::content_match::query_keys(["run".to_string()]).as_slice()
+            portunus_text::query_keys(["run".to_string()]).as_slice()
         );
         assert_eq!(t.keys(), ["run".to_string()]);
 
@@ -429,7 +429,7 @@ mod tests {
         // What the double keying did, spelled out so the trap stays visible: feed
         // this module already-keyed terms and the same text loses that word.
         let keyed: Vec<String> =
-            crate::content_match::query_keys(raw.iter().map(|s| s.to_string()));
+            portunus_text::query_keys(raw.iter().map(|s| s.to_string()));
         let pre_keyed: Vec<&str> = keyed.iter().map(String::as_str).collect();
         let lost = marks_of(&marked("The University of Edinburgh", &pre_keyed));
         assert!(

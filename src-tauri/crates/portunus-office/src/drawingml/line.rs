@@ -5,11 +5,11 @@
 //! parsed and exposed anyway, because a caller that draws the shape as SVG has
 //! somewhere to put them.
 
-use crate::office::drawingml::color::Color;
-use crate::office::drawingml::fill::{parse_fill_opt, pattern_color, Fill, PATTERN_INK};
-use crate::office::drawingml::theme::Theme;
-use crate::office::html::{emu_to_px, fmt_px};
-use crate::office::xml::{self, child, elems};
+use crate::drawingml::color::Color;
+use crate::drawingml::fill::{parse_fill_opt, pattern_color, Fill, PATTERN_INK};
+use crate::drawingml::theme::Theme;
+use crate::html::{emu_to_px, fmt_px};
+use crate::xml::{self, child, elems};
 
 /// Width used when `a:ln` carries no `w`. Office's default outline is a hairline
 /// (0.75pt ≈ 1px at the CSS reference resolution).

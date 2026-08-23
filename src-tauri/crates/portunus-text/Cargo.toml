@@ -1,0 +1,8 @@
+[package]
+name = "portunus-text"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Query/token normalization shared by the content index and the office renderer"
+
+[dependencies]

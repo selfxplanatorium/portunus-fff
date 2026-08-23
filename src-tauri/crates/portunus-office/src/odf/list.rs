@@ -727,7 +727,7 @@ fn align_of(v: &str) -> Option<Align> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::drawingml::color::Color;
+    use crate::drawingml::color::Color;
 
     const NS: &str = concat!(
         r#" xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0""#,

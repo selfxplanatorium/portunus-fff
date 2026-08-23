@@ -10,9 +10,9 @@
 //! `super::render` is the consumer; the two later passes add their own classes to
 //! its dispatch.
 
-use crate::office::emit::Notes;
-use crate::office::pkg::{self, Budget, Zip};
-use crate::office::xml::{self, attr_local, child, elems};
+use crate::emit::Notes;
+use crate::pkg::{self, Budget, Zip};
+use crate::xml::{self, attr_local, child, elems};
 
 const CONTENT: &str = "content.xml";
 const STYLES: &str = "styles.xml";
@@ -349,7 +349,7 @@ fn hex_val(b: u8) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::pkg::TestPkg;
+    use crate::pkg::TestPkg;
 
     fn content_xml(body_child: &str) -> Vec<u8> {
         format!(

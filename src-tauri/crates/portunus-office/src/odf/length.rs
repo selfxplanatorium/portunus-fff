@@ -9,8 +9,8 @@
 //!
 //! Every ODF renderer measures through here.
 
-use crate::office::drawingml::color::Color;
-use crate::office::html::fmt_px;
+use crate::drawingml::color::Color;
+use crate::html::fmt_px;
 
 /// CSS reference resolution: 96 px to the inch. Every other unit is defined
 /// against the inch, so there is one constant rather than one per unit.
@@ -287,8 +287,8 @@ mod tests {
     #[test]
     fn pt_conversion_matches_the_shared_converter() {
         // One definition of the point, not two.
-        assert_eq!(px("12pt"), Some(crate::office::html::pt_to_px(12.0)));
-        assert_eq!(px("0.74pt"), Some(crate::office::html::pt_to_px(0.74)));
+        assert_eq!(px("12pt"), Some(crate::html::pt_to_px(12.0)));
+        assert_eq!(px("0.74pt"), Some(crate::html::pt_to_px(0.74)));
     }
 
     #[test]

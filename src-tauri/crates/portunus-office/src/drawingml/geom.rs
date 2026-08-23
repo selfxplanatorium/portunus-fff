@@ -1,8 +1,8 @@
 //! Shape geometry: the EMU→px scale, `a:xfrm` parsing, group-transform
 //! composition, and as much of `a:prstGeom` as CSS can express.
 
-use crate::office::html::{fmt_pct, fmt_px, Style};
-use crate::office::xml::{self, child, elems};
+use crate::html::{fmt_pct, fmt_px, Style};
+use crate::xml::{self, child, elems};
 
 /// 914400 EMU per inch ÷ 96 px per inch. `html::emu_to_px` is the f32 twin of
 /// this; geometry composition needs f64 because a group chain multiplies scale

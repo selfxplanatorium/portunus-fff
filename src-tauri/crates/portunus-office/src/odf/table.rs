@@ -539,7 +539,7 @@ fn padding_css(s: &mut Style, cp: &CellProps) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::odf::text::tests::{body, content, odt, styles};
+    use crate::odf::text::tests::{body, content, odt, styles};
 
     /// A `table-column` style of `w` inches and a `table-cell` style that paints,
     /// which between them cover every per-axis lookup a table makes.

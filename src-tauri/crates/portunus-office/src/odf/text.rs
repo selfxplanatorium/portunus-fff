@@ -1036,7 +1036,7 @@ fn emit_note_tail<'a>(ctx: &mut Ctx<'a>, w: &mut Writer) {
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::office::pkg::TestPkg;
+    use crate::pkg::TestPkg;
 
     /// Every prefix the fixtures use. `roxmltree` refuses an undeclared one, and
     /// the renderers match on local names, so which URIs these are does not matter
@@ -1729,7 +1729,7 @@ pub(super) mod tests {
     #[test]
     fn a_text_document_indexes_as_one_unnamed_section() {
         let f = body("index-one", "<text:p>café</text:p><text:h>naïve</text:h>");
-        let sections = crate::office::odf::extract_sections(f.path()).expect("extract");
+        let sections = crate::odf::extract_sections(f.path()).expect("extract");
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].name, "");
         assert!(sections[0].text.contains("café"), "{:?}", sections[0].text);
@@ -1745,7 +1745,7 @@ pub(super) mod tests {
             "<text:p>café<text:tab/>naïve</text:p>\
              <text:p>one<text:line-break/>two</text:p>",
         );
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(text.contains("café naïve"), "{text:?}");
         assert!(text.contains("one two"), "{text:?}");
     }
@@ -1759,7 +1759,7 @@ pub(super) mod tests {
              <table:table-cell><text:p>naïve</text:p></table:table-cell>\
              </table:table-row></table:table>",
         );
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(!text.contains("cafénaïve"), "{text:?}");
     }
 
@@ -1776,7 +1776,7 @@ pub(super) mod tests {
              <text:p>kept<office:annotation><text:p>comment-naïve</text:p>\
              </office:annotation></text:p>",
         );
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(text.contains("kept"), "{text:?}");
         assert!(!text.contains("deleted-café"), "{text:?}");
         assert!(!text.contains("comment-naïve"), "{text:?}");

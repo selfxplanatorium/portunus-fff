@@ -899,7 +899,7 @@ fn borders(s: &mut Style, b: &Sides) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::odf::text::tests::{Fixture, NS};
+    use crate::odf::text::tests::{Fixture, NS};
 
     /// A spreadsheet package. `named` goes into `styles.xml`'s `office:styles`,
     /// `auto` into `content.xml`'s automatic styles, `tables` into the body.
@@ -1305,7 +1305,7 @@ mod tests {
                 sheet("Widget", "<table:table-column/>", &text_row(&["naïve"])),
             ),
         );
-        let sections = crate::office::odf::extract_sections(f.path()).expect("extract");
+        let sections = crate::odf::extract_sections(f.path()).expect("extract");
         // The index and the tab strip must agree, or a jump opens the wrong sheet.
         assert_eq!(sections.len(), f.doc().sections.len());
         assert_eq!(sections[0].name, "Alap");
@@ -1325,7 +1325,7 @@ mod tests {
              <table:table-cell office:value-type=\"float\" office:value=\"42\"/>\
              </table:table-row>";
         let f = book("index-cells", "", "", &sheet("S", "<table:table-column/>", rows));
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(text.contains("1,752 m"), "{text:?}");
         assert!(text.contains("42"), "{text:?}");
         assert!(text.contains('\t'), "cells must not fuse: {text:?}");
@@ -1338,7 +1338,7 @@ mod tests {
             rows.push_str(&text_row(&[&format!("row{r}")]));
         }
         let f = book("index-clip", "", "", &sheet("S", "<table:table-column/>", &rows));
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(text.contains(&format!("row{MAX_ROWS}")));
         assert!(!text.contains(&format!("row{}", MAX_ROWS + 1)), "{text:?}");
     }
@@ -1351,7 +1351,7 @@ mod tests {
              office:value-type=\"string\"><text:p>café</text:p></table:table-cell>\
              </table:table-row>";
         let f = book("index-rep", "", "", &sheet("S", "<table:table-column/>", rows));
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert_eq!(text.matches("café").count(), 1, "{text:?}");
     }
 }

@@ -310,8 +310,8 @@ fn push(ctx: &mut Ctx, out: &mut Vec<Run>, mut g: Graphic, wrap: Wrap) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::odf::text::tests::{content, odt, odt_media, png_bytes, styles, Fixture};
-    use crate::office::OfficeDoc;
+    use crate::odf::text::tests::{content, odt, odt_media, png_bytes, styles, Fixture};
+    use crate::OfficeDoc;
 
     /// Graphic styles covering the three wraps a frame can degrade through.
     fn graphic_styles() -> String {

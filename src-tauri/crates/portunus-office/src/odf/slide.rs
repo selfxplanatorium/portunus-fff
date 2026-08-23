@@ -831,7 +831,7 @@ fn transform(ctx: &mut Ctx, n: Node) -> Transform {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::office::odf::text::tests::{png_bytes, Fixture, NS};
+    use crate::odf::text::tests::{png_bytes, Fixture, NS};
 
     /// A presentation package. `auto` holds `content.xml`'s automatic styles,
     /// `pages` its slides, `named` the named styles, and `master` the master page's
@@ -1267,7 +1267,7 @@ mod tests {
                 page("Two", &text_frame("", "naïve second")),
             ),
         );
-        let sections = crate::office::odf::extract_sections(f.path()).expect("extract");
+        let sections = crate::odf::extract_sections(f.path()).expect("extract");
         // The index and the section strip must agree, or a jump opens the wrong slide.
         assert_eq!(sections.len(), f.doc().sections.len());
         assert!(sections[0].text.contains("café first"), "{:?}", sections[0].text);
@@ -1288,7 +1288,7 @@ mod tests {
             text_frame("", "on the slide")
         );
         let f = deck("index-notes", "", "", "", &page("One", &shapes));
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(text.contains("on the slide"), "{text:?}");
         assert!(!text.contains("only for the speaker"), "{text:?}");
     }
@@ -1304,7 +1304,7 @@ mod tests {
             &page("One", &text_frame("", "café")),
         );
         assert!(f.doc().html.contains("every slide footer"), "the master is drawn");
-        let text = &crate::office::odf::extract_sections(f.path()).expect("extract")[0].text;
+        let text = &crate::odf::extract_sections(f.path()).expect("extract")[0].text;
         assert!(text.contains("café"), "{text:?}");
         assert!(!text.contains("every slide footer"), "{text:?}");
     }

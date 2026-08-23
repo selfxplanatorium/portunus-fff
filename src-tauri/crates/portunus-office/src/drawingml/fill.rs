@@ -6,10 +6,10 @@
 //! inline the part. That keeps this module free of package/IO concerns and stops
 //! a document from pulling bytes in during colour resolution.
 
-use crate::office::drawingml::color::{parse_color_elem, Color};
-use crate::office::drawingml::theme::Theme;
-use crate::office::html::{fmt_deg, fmt_pct, Style};
-use crate::office::xml::{self, child, elems};
+use crate::drawingml::color::{parse_color_elem, Color};
+use crate::drawingml::theme::Theme;
+use crate::html::{fmt_deg, fmt_pct, Style};
+use crate::xml::{self, child, elems};
 
 /// `a:lin@ang`, `a:gs@pos` and friends: 60000ths of a degree.
 const ANG_PER_DEG: f64 = 60_000.0;
