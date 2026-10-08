@@ -26,6 +26,7 @@ depends=(
   'gtk3'
   'gtk-layer-shell'   # binary links it; needed even though layer_shell is opt-in
   'zlib'              # libz.so.1, linked by fff's libgit2 (file index)
+  'wayland'           # libwayland-client.so.0, KWin region blur (kde_blur.rs)
   'libarchive'        # bundled libtesseract.so.5 links libarchive.so.13 (not bundled)
   'nss'               # bundled libpoppler.so.134 links libnss3/libsmime3 (PDF sig verify)
   'nspr'              # transitive of nss (libnspr4/libplc4/libplds4)

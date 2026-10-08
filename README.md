@@ -73,8 +73,10 @@ New options under **Settings → Appearance**:
 
 - **Opacity**: fade the launcher's background panels (30%–solid). Text, icons
   and the selection stay solid.
-- **Blur behind**: on Hyprland the blur rule is applied at runtime via
-  `hyprctl`; for other compositors, Settings shows the rule to add yourself.
+- **Blur behind**: on KDE Plasma (Wayland) KWin blurs only the region behind
+  the visible card, rounded corners included; on Hyprland the blur rule is
+  applied at runtime via `hyprctl`; for other compositors, Settings shows the
+  rule to add yourself.
 - **Fonts**: pick the interface and monospace fonts from your installed fonts.
 
 ### Motion
@@ -301,7 +303,7 @@ font_size         = 13       # whole-UI scale
 font_family       = ""       # "" = built-in stack; any installed family otherwise
 mono_font_family  = ""
 opacity           = 1.0      # background panels, 0.3 .. 1.0
-blur              = false    # compositor blur behind the launcher (applied via hyprctl on Hyprland)
+blur              = false    # compositor blur behind the launcher (KWin region blur on KDE, hyprctl on Hyprland)
 window_animations = true     # entrance + search-bar-to-window morph
 ```
 

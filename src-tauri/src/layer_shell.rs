@@ -60,6 +60,11 @@ pub fn apply(_window: &tauri::WebviewWindow) {}
 /// the newer form is tried first and the legacy form is the fallback; each is
 /// accepted only if hyprctl answers `ok`.
 pub fn apply_compositor_blur(enabled: bool) {
+    // KDE Plasma: per-region blur behind the card only (kde_blur.rs). No-op on
+    // compositors without org_kde_kwin_blur_manager.
+    #[cfg(target_os = "linux")]
+    crate::kde_blur::set_enabled(enabled);
+
     if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
         return;
     }

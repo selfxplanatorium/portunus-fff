@@ -91,3 +91,10 @@ gtk = "0.18"            # must match tao's gtk version (see Cargo.lock)
 gio = "0.18"            # .desktop launching (GDesktopAppInfo); same version gtk pulls in
 libc = "0.2"            # setsid() in the post-fork hook of launch_desktop_entry
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] } # wlr-layer-shell overlay; v0_6 for set_keyboard_mode
+# KDE blur region (kde_blur.rs): talk org_kde_kwin_blur on GDK's own wl_display.
+# `client_system` is the libwayland-backed backend - the only one that can adopt
+# a foreign wl_display/wl_proxy. gdkwayland-sys is already in the tree via tao.
+gdkwayland-sys = "0.18"
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }

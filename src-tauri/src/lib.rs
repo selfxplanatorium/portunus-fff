@@ -9,6 +9,8 @@ mod extensions;
 mod focus;
 mod frecency;
 mod ipc;
+#[cfg(target_os = "linux")]
+mod kde_blur;
 mod keybinds;
 mod layer_shell;
 mod native_host;
@@ -145,6 +147,27 @@ fn list_font_families() -> Vec<String> {
     families.sort_by_key(|f| f.to_lowercase());
     families.dedup();
     families
+}
+
+/// Window-relative logical-pixel rects outlining the visible launcher card, for
+/// KWin's per-region blur (`kde_blur.rs`). Empty = blur nothing. Sent on every
+/// size/position change; a no-op off KDE Plasma Wayland or with blur off.
+#[tauri::command]
+#[allow(unused_variables)]
+fn set_blur_region(rects: Vec<BlurRectArg>) {
+    #[cfg(target_os = "linux")]
+    kde_blur::set_rects(
+        rects.into_iter().map(|r| kde_blur::BlurRect { x: r.x, y: r.y, w: r.w, h: r.h }).collect(),
+    );
+}
+
+#[derive(serde::Deserialize)]
+#[allow(dead_code)]
+struct BlurRectArg {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
 }
 
 /// Records frecency for an invoked command entry so frequently-used commands
@@ -922,6 +945,11 @@ pub fn run() {
             // Async extension query orchestration (streams `search-stream`).
             extensions::query::init(app.handle().clone());
 
+            // Before the blur kick-off below: kde_blur needs the handle to reach the
+            // GTK main thread.
+            #[cfg(target_os = "linux")]
+            kde_blur::init(app.handle());
+
             if let Some(window) = app.get_webview_window("main") {
                 if layer_shell_enabled {
                     layer_shell::apply(&window);
@@ -1277,6 +1305,7 @@ pub fn run() {
             list_commands,
             list_icon_themes,
             list_font_families,
+            set_blur_region,
             command_used,
             content_match_section,
             content_match_keys,

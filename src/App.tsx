@@ -28,6 +28,7 @@ import { selection } from "./selection/controller";
 import { useTauriListener } from "./hooks/useTauriListener";
 import OnboardingWizard from "./components/onboarding/OnboardingWizard";
 import "./providers";
+import { cardBlurRegion } from "./blurRegion";
 import "./App.css";
 import "./themes.css";
 
@@ -168,6 +169,8 @@ export default function App() {
   // next show starts from nothing instead of flashing the last frame.
   const [enterSeq, setEnterSeq] = useState(0);
   const [hiddenPhase, setHiddenPhase] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const scheduleBlurRef = useRef<() => void>(() => {});
   // True while a form submit's activate call is in flight (locks the form).
   const [formBusy, setFormBusy] = useState(false);
   // True while an opens_form activation runs with the window kept visible
@@ -322,6 +325,48 @@ export default function App() {
   // its own effect (not the main keydown handler, which early-returns in
   // clipboard/onboarding modes - badges must work there too) and writes the
   // attribute imperatively so holding Alt never re-renders the tree.
+  // KWin blur behind the card only ([appearance] blur on KDE Plasma Wayland;
+  // the backend no-ops elsewhere and while blur is off). Report the card's
+  // outline whenever it moves or resizes - the bar/window morph resizes it every
+  // frame - at most once per animation frame. Hidden window: blur nothing
+  // (sent immediately; rAF does not run while hidden).
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    let raf = 0;
+    const send = () => {
+      raf = 0;
+      invoke("set_blur_region", { rects: document.hidden ? [] : cardBlurRegion(card) }).catch(() => {});
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(send); };
+    scheduleBlurRef.current = schedule;
+    // Rows and previews animate too and their end events bubble; only the
+    // card's own motion changes its outline.
+    const onMotionEnd = (e: Event) => { if (e.target === card) schedule(); };
+    const onVisibility = () => {
+      if (!document.hidden) { schedule(); return; }
+      cancelAnimationFrame(raf);
+      send();
+    };
+    const ro = new ResizeObserver(schedule);
+    ro.observe(card);
+    // The entrance animation moves the card with transforms, which a
+    // ResizeObserver never sees: resend its resting outline when motion ends.
+    card.addEventListener("animationend", onMotionEnd);
+    card.addEventListener("transitionend", onMotionEnd);
+    window.addEventListener("resize", schedule);
+    document.addEventListener("visibilitychange", onVisibility);
+    schedule();
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      card.removeEventListener("animationend", onMotionEnd);
+      card.removeEventListener("transitionend", onMotionEnd);
+      window.removeEventListener("resize", schedule);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
   // Park the card invisible as the window hides; window-show brings it back in.
   useEffect(() => {
     const onVis = () => { if (document.hidden) setHiddenPhase(true); };
@@ -430,6 +475,7 @@ export default function App() {
   }, []);
 
   useTauriListener("window-show", () => {
+    scheduleBlurRef.current();
     setHiddenPhase(false);
     setEnterSeq(s => s + 1);
     focusedRef.current = true;
@@ -1533,6 +1579,7 @@ export default function App() {
         />
       )}
       <div
+        ref={cardRef}
         className="card"
         onMouseDown={e => {
           // Keep focus (and all keybinds) on the search input: no mousedown may
