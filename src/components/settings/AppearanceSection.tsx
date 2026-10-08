@@ -49,7 +49,7 @@ const FONT_DEFAULT = "Default";
 // window. Hyprland gets the rule applied at runtime; elsewhere, the snippet.
 const BLUR_HINTS: Partial<Record<DesktopEnv, ReactNode>> = {
   hyprland: <>Applied to the <code>portunus</code> layer at runtime via <code>hyprctl</code> (needs layer shell on). To keep it across Hyprland reloads, add a blur and an ignore-alpha <code>layerrule</code> for the <code>portunus</code> namespace to hyprland.conf.</>,
-  kde: <>KWin blurs exactly the launcher card's outline, rounded corners included, never the transparent rest of the window. Needs the Blur desktop effect enabled in System Settings.</>,
+  kde: <>KWin blurs exactly the launcher card's outline, rounded corners included, never the transparent rest of the window. Needs a blur desktop effect enabled in System Settings (the stock Blur or Better Blur DX).</>,
   sway: <>Needs SwayFX: add <code>layer_effects "portunus" blur enable</code> to your sway config. Plain sway cannot blur.</>,
   other: <>Your compositor has to do the blurring. Add a blur rule for the <code>portunus</code> layer-shell namespace in its config, if it supports one.</>,
 };

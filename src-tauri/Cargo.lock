@@ -4647,6 +4647,7 @@ dependencies = [
  "wasmtime",
  "wayland-backend",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-plasma",
  "zip",
 ]

@@ -2,10 +2,17 @@
 //! Plasma Wayland).
 //!
 //! The launcher window is a transparent 960x640 surface, and most of it is
-//! empty: KWin's default blur would frost the whole rectangle. Plasma's
-//! `org_kde_kwin_blur` protocol lets a client name the exact region to blur, so
-//! the frontend reports the card's rounded outline (`set_blur_region`) and this
-//! module forwards it as a `wl_region`.
+//! empty: a whole-surface blur would frost the entire rectangle. The frontend
+//! reports the card's rounded outline (`set_blur_region`) and this module
+//! forwards it as a `wl_region` through whichever blur protocol KWin offers:
+//!
+//! - `ext_background_effect_manager_v1` (staging ext-background-effect-v1),
+//!   preferred. KWin 6.7 effects such as Better Blur DX implement blur only
+//!   through it, and with the stock Blur effect disabled KWin no longer
+//!   advertises the Plasma protocol at all. Used only while the compositor
+//!   reports the `blur` capability.
+//! - `org_kde_kwin_blur_manager` (Plasma's blur.xml), the fallback for older
+//!   Plasma and the stock Blur effect.
 //!
 //! Wire-up: GDK already owns the Wayland connection, so this borrows its
 //! `wl_display` and the window's `wl_surface` (gdkwayland-sys) and wraps them
@@ -14,21 +21,32 @@
 //! so GDK's own dispatching never sees our objects, and every call runs on the
 //! GTK main thread, where GDK is not reading the socket concurrently.
 //!
-//! No-op unless the display is a GdkWaylandDisplay *and* the compositor
-//! advertises `org_kde_kwin_blur_manager`; Hyprland and others never get past
-//! the first probe (see `layer_shell::apply_compositor_blur` for Hyprland).
+//! Both protocols tie their per-surface object to a wl_surface that GDK
+//! destroys on every hide, and ext-background-effect makes any request on an
+//! object whose surface is gone a fatal protocol error (it would take GDK's
+//! whole connection down). So the per-surface object is destroyed on GTK's
+//! `unmap`, which runs before GDK tears the surface down, and recreated on the
+//! next show.
+//!
+//! No-op unless the display is a GdkWaylandDisplay and one of the protocols is
+//! advertised; Hyprland and others stop at the probe (see
+//! `layer_shell::apply_compositor_blur` for Hyprland).
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use gtk::glib::translate::{from_glib, ToGlibPtr};
 use gtk::prelude::*;
 use tauri::{AppHandle, Manager};
 use wayland_client::backend::{Backend, ObjectId};
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{registry_queue_init, GlobalList, GlobalListContents};
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_region::WlRegion, wl_registry, wl_surface::WlSurface};
-use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_client::{delegate_noop, Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum};
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::{
+    self, Capability, ExtBackgroundEffectManagerV1,
+};
+use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur::OrgKdeKwinBlur;
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur_manager::OrgKdeKwinBlurManager;
 
@@ -43,17 +61,22 @@ pub struct BlurRect {
 }
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
-/// `[appearance] blur`. Off = the region is emptied (the blur object stays).
+/// `[appearance] blur`. Off = the region is cleared (the per-surface object stays).
 static ENABLED: AtomicBool = AtomicBool::new(false);
-/// Latched after the first probe fails (X11, or no KWin blur manager).
-static UNSUPPORTED: AtomicBool = AtomicBool::new(false);
+/// Latched when the display is not Wayland (X11): nothing here can ever work.
+/// A Wayland compositor without a blur protocol is retried once per show
+/// instead (`Wayland::probed_this_show`), since effects can be toggled live.
+static NOT_WAYLAND: AtomicBool = AtomicBool::new(false);
 /// One main-thread apply in flight at a time; it reads the latest rects.
 static PENDING: AtomicBool = AtomicBool::new(false);
 static RECTS: Mutex<Vec<BlurRect>> = Mutex::new(Vec::new());
+/// Last probe outcome written to the log (0 = none yet), so the journal gets
+/// one line per change rather than one per show.
+static LOGGED_PROBE: AtomicU8 = AtomicU8::new(0);
 
 thread_local! {
     // GTK main thread only.
-    static KWIN: RefCell<Option<KwinBlur>> = const { RefCell::new(None) };
+    static WAYLAND: RefCell<Option<Wayland>> = const { RefCell::new(None) };
 }
 
 /// Remember the app handle; call once in setup, before any `set_*`.
@@ -74,7 +97,7 @@ pub fn set_rects(rects: Vec<BlurRect>) {
 }
 
 fn schedule() {
-    if UNSUPPORTED.load(Ordering::Relaxed) || PENDING.swap(true, Ordering::AcqRel) {
+    if NOT_WAYLAND.load(Ordering::Relaxed) || PENDING.swap(true, Ordering::AcqRel) {
         return;
     }
     let Some(app) = APP.get() else {
@@ -97,31 +120,39 @@ fn apply(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else { return };
     let Ok(gtk_win) = window.gtk_window() else { return };
 
-    let changed = KWIN.with(|cell| {
+    let changed = WAYLAND.with(|cell| {
         let mut cell = cell.borrow_mut();
         if cell.is_none() {
-            // Nothing to blur yet: don't probe (or bind globals) just to clear.
+            // Nothing to blur yet: don't connect (or bind globals) just to clear.
             if rects.is_empty() {
                 return false;
             }
-            match KwinBlur::connect(&gtk_win) {
-                Some(kwin) => *cell = Some(kwin),
-                None => {
-                    UNSUPPORTED.store(true, Ordering::Relaxed);
-                    return false;
-                }
-            }
-            // GDK destroys the wl_surface when the window unmaps; release the
-            // blur object while that surface still exists.
+            let Some(wayland) = Wayland::connect(&gtk_win) else {
+                NOT_WAYLAND.store(true, Ordering::Relaxed);
+                log_probe(Probe::NotWayland);
+                return false;
+            };
+            *cell = Some(wayland);
+            // GDK destroys the wl_surface when the window unmaps; destroy the
+            // per-surface object while that surface still exists, and allow a
+            // fresh probe on the next show.
             gtk_win.connect_unmap(|_| {
-                KWIN.with(|cell| {
-                    if let Some(kwin) = cell.borrow_mut().as_mut() {
-                        kwin.release_blur();
+                WAYLAND.with(|cell| {
+                    if let Some(wayland) = cell.borrow_mut().as_mut() {
+                        wayland.release_surface_blur();
+                        wayland.probed_this_show = false;
                     }
                 });
             });
         }
-        cell.as_mut().is_some_and(|kwin| kwin.set_region(&gtk_win, &rects))
+        let Some(wayland) = cell.as_mut() else { return false };
+        if wayland.backend.is_none() {
+            if rects.is_empty() || wayland.probed_this_show {
+                return false;
+            }
+            wayland.probe();
+        }
+        wayland.set_region(&gtk_win, &rects)
     });
 
     // Blur state is double-buffered on the wl_surface: make sure a commit
@@ -131,18 +162,57 @@ fn apply(app: &AppHandle) {
     }
 }
 
-struct KwinBlur {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Probe {
+    BackgroundEffect = 1,
+    KwinBlur = 2,
+    None = 3,
+    NotWayland = 4,
+}
+
+fn log_probe(probe: Probe) {
+    if LOGGED_PROBE.swap(probe as u8, Ordering::Relaxed) == probe as u8 {
+        return;
+    }
+    let msg = match probe {
+        Probe::BackgroundEffect => "using ext_background_effect_manager_v1",
+        Probe::KwinBlur => "using org_kde_kwin_blur_manager",
+        Probe::None => "no blur protocol advertised (ext_background_effect with blur capability, or org_kde_kwin_blur_manager); will retry on next show",
+        Probe::NotWayland => "not a Wayland display; region blur disabled",
+    };
+    eprintln!("[portunus] blur: {msg}");
+}
+
+/// The bound blur protocol.
+enum BlurManager {
+    BackgroundEffect(ExtBackgroundEffectManagerV1),
+    Kwin(OrgKdeKwinBlurManager),
+}
+
+/// The per-surface blur object of whichever protocol is bound.
+enum SurfaceBlur {
+    BackgroundEffect(ExtBackgroundEffectSurfaceV1),
+    Kwin(OrgKdeKwinBlur),
+}
+
+struct Wayland {
     conn: Connection,
     queue: EventQueue<State>,
     qh: QueueHandle<State>,
+    state: State,
+    /// Kept for re-probing: tracks globals as registry events are dispatched.
+    globals: GlobalList,
     compositor: WlCompositor,
-    manager: OrgKdeKwinBlurManager,
-    /// The blur object and the address of the wl_surface it belongs to. GDK
-    /// swaps the wl_surface on every hide/show, so this is per surface.
-    blur: Option<(usize, OrgKdeKwinBlur)>,
+    backend: Option<BlurManager>,
+    /// A probe found nothing since the last unmap; next try is the next show.
+    probed_this_show: bool,
+    /// The per-surface object and the address of the wl_surface it belongs to.
+    /// GDK swaps the wl_surface on every hide/show, so this is per surface.
+    surface_blur: Option<(usize, SurfaceBlur)>,
 }
 
-impl KwinBlur {
+impl Wayland {
+    /// Adopt GDK's connection. None only when the display is not Wayland.
     fn connect(gtk_win: &gtk::ApplicationWindow) -> Option<Self> {
         let gdk_win = gtk_win.window()?;
         let display = gdk_win.display();
@@ -167,20 +237,58 @@ impl KwinBlur {
         // Own queue + own wl_registry: GDK's queue never sees these objects.
         let (globals, queue) = registry_queue_init::<State>(&conn).ok()?;
         let qh = queue.handle();
-        let manager = globals.bind::<OrgKdeKwinBlurManager, _, _>(&qh, 1..=1, ()).ok()?;
         let compositor = globals.bind::<WlCompositor, _, _>(&qh, 1..=4, ()).ok()?;
-        Some(Self { conn, queue, qh, compositor, manager, blur: None })
+        Some(Self {
+            conn,
+            queue,
+            qh,
+            state: State::default(),
+            globals,
+            compositor,
+            backend: None,
+            probed_this_show: false,
+            surface_blur: None,
+        })
+    }
+
+    /// Bind the best available blur protocol, if any.
+    fn probe(&mut self) {
+        self.probed_this_show = true;
+        // Pick up globals announced since the last look (an effect enabled live).
+        let _ = self.queue.roundtrip(&mut self.state);
+
+        if let Ok(manager) = self.globals.bind::<ExtBackgroundEffectManagerV1, _, _>(&self.qh, 1..=1, ()) {
+            // `capabilities` is sent right after the bind.
+            self.state.ext_blur_capable = None;
+            let _ = self.queue.roundtrip(&mut self.state);
+            if self.state.ext_blur_capable == Some(true) {
+                self.backend = Some(BlurManager::BackgroundEffect(manager));
+                log_probe(Probe::BackgroundEffect);
+                return;
+            }
+            // Advertised without blur (no blur effect loaded): try Plasma's.
+            manager.destroy();
+        }
+        if let Ok(manager) = self.globals.bind::<OrgKdeKwinBlurManager, _, _>(&self.qh, 1..=1, ()) {
+            self.backend = Some(BlurManager::Kwin(manager));
+            log_probe(Probe::KwinBlur);
+            return;
+        }
+        log_probe(Probe::None);
     }
 
     /// Point the blur at `rects` on the window's current wl_surface. Returns
     /// whether anything was sent (and a surface commit is needed).
     fn set_region(&mut self, gtk_win: &gtk::ApplicationWindow, rects: &[BlurRect]) -> bool {
+        if self.backend.is_none() {
+            return false;
+        }
         let Some(surface_ptr) = current_surface(gtk_win) else {
-            self.release_blur();
+            self.release_surface_blur();
             return false;
         };
-        if self.blur.as_ref().map(|(ptr, _)| *ptr) != Some(surface_ptr as usize) {
-            self.release_blur();
+        if self.surface_blur.as_ref().map(|(ptr, _)| *ptr) != Some(surface_ptr as usize) {
+            self.release_surface_blur();
             if rects.is_empty() {
                 return false;
             }
@@ -191,36 +299,62 @@ impl KwinBlur {
                 Err(_) => return false,
             };
             let Ok(surface) = WlSurface::from_id(&self.conn, id) else { return false };
-            let blur = self.manager.create(&surface, &self.qh, ());
-            self.blur = Some((surface_ptr as usize, blur));
+            // Exactly one per surface: a second get_background_effect on the
+            // same surface is a protocol error.
+            let blur = match self.backend.as_ref() {
+                Some(BlurManager::BackgroundEffect(m)) => {
+                    SurfaceBlur::BackgroundEffect(m.get_background_effect(&surface, &self.qh, ()))
+                }
+                Some(BlurManager::Kwin(m)) => SurfaceBlur::Kwin(m.create(&surface, &self.qh, ())),
+                None => return false,
+            };
+            self.surface_blur = Some((surface_ptr as usize, blur));
         }
-        let Some((_, blur)) = self.blur.as_ref() else { return false };
+        let Some((_, blur)) = self.surface_blur.as_ref() else { return false };
 
-        // Empty region = blur nothing. (A null region would mean the whole
-        // surface, so "off" must never unset it.)
-        let region = self.compositor.create_region(&self.qh, ());
-        for (x, y, w, h) in rects.iter().filter_map(to_wl_rect) {
-            region.add(x, y, w, h);
+        let region = (!rects.is_empty()).then(|| {
+            let region = self.compositor.create_region(&self.qh, ());
+            for (x, y, w, h) in rects.iter().filter_map(to_wl_rect) {
+                region.add(x, y, w, h);
+            }
+            region
+        });
+        // Both protocols copy the region, so it can be destroyed right away.
+        match blur {
+            // NULL removes the effect here.
+            SurfaceBlur::BackgroundEffect(effect) => {
+                effect.set_blur_region(region.as_ref());
+                if let Some(region) = region {
+                    region.destroy();
+                }
+            }
+            // Here NULL would mean the whole surface, so clearing sends an
+            // empty region instead; the request also needs its own commit.
+            SurfaceBlur::Kwin(kwin) => {
+                let region = region.unwrap_or_else(|| self.compositor.create_region(&self.qh, ()));
+                kwin.set_region(Some(&region));
+                kwin.commit();
+                region.destroy();
+            }
         }
-        blur.set_region(Some(&region));
-        blur.commit();
-        region.destroy();
         self.flush();
         true
     }
 
-    fn release_blur(&mut self) {
-        if let Some((_, blur)) = self.blur.take() {
-            blur.release();
+    fn release_surface_blur(&mut self) {
+        if let Some((_, blur)) = self.surface_blur.take() {
+            match blur {
+                SurfaceBlur::BackgroundEffect(effect) => effect.destroy(),
+                SurfaceBlur::Kwin(kwin) => kwin.release(),
+            }
             self.flush();
         }
     }
 
     fn flush(&mut self) {
         let _ = self.conn.flush();
-        // Our objects have no events; drain whatever (delete_id bookkeeping)
-        // landed on the private queue.
-        let _ = self.queue.dispatch_pending(&mut State);
+        // Drain our queue: capability changes and delete_id bookkeeping.
+        let _ = self.queue.dispatch_pending(&mut self.state);
     }
 }
 
@@ -246,7 +380,12 @@ fn to_wl_rect(r: &BlurRect) -> Option<(i32, i32, i32, i32)> {
     (x1 > x0 && y1 > y0).then(|| (clamp(x0), clamp(y0), clamp(x1 - x0), clamp(y1 - y0)))
 }
 
-struct State;
+#[derive(Default)]
+struct State {
+    /// Latest `capabilities` from ext_background_effect_manager_v1 (None until
+    /// it arrives).
+    ext_blur_capable: Option<bool>,
+}
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
     fn event(
@@ -257,12 +396,34 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        // Globals added/removed after startup don't matter here.
+        // GlobalList tracks additions/removals itself; probe() reads it.
+    }
+}
+
+impl Dispatch<ExtBackgroundEffectManagerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _: &ExtBackgroundEffectManagerV1,
+        event: ext_background_effect_manager_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let ext_background_effect_manager_v1::Event::Capabilities { flags } = event {
+            let blur = match flags {
+                WEnum::Value(caps) => caps.contains(Capability::Blur),
+                WEnum::Unknown(raw) => raw & Capability::Blur.bits() != 0,
+            };
+            // Losing the capability later means the compositor stops applying
+            // the effect on its own; nothing to undo here.
+            state.ext_blur_capable = Some(blur);
+        }
     }
 }
 
 delegate_noop!(State: WlCompositor);
 delegate_noop!(State: WlRegion);
+delegate_noop!(State: ExtBackgroundEffectSurfaceV1);
 delegate_noop!(State: OrgKdeKwinBlurManager);
 delegate_noop!(State: OrgKdeKwinBlur);
 
