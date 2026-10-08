@@ -65,8 +65,8 @@ rustPlatform.buildRustPackage {
   doCheck = true;
 
   meta = {
-    description = "Application launcher and power-user search for Wayland";
-    homepage = "https://github.com/SzilBalazs/portunus";
+    description = "Application launcher and power-user search for Wayland (portunus fork with fff file search)";
+    homepage = "https://github.com/selfxplanatorium/portunus";
     license = lib.licenses.asl20;
     platforms = lib.platforms.linux;
     mainProgram = "portunus";

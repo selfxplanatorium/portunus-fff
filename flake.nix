@@ -1,5 +1,5 @@
 {
-  description = "Application launcher and power-user search for Wayland";
+  description = "Application launcher and power-user search for Wayland (portunus fork with fff file search)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";

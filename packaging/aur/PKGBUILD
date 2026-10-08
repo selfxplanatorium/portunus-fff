@@ -14,9 +14,9 @@ pkgname=portunus-bin
 _pkgname=portunus
 pkgver=@PKGVER@
 pkgrel=1
-pkgdesc="Application launcher and power-user search for Wayland"
+pkgdesc="Application launcher and power-user search for Wayland (portunus fork with fff file search)"
 arch=('x86_64')
-url="https://github.com/SzilBalazs/portunus"
+url="https://github.com/selfxplanatorium/portunus"
 license=('Apache-2.0')
 provides=("portunus=$pkgver")
 conflicts=('portunus')

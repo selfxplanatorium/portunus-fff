@@ -137,7 +137,7 @@ FLAGS:
   --close             Close the launcher window (signals running instance)
   --toggle            Toggle the launcher window (signals running instance)
   --clipboard         Show the launcher pre-filled with \"clipboard\"
-  --reindex           Rebuild the content search index
+  --reindex           Rebuild the content index and re-walk the file roots
   --reload-config     Reload config from file without restarting
   --reload-extensions Re-discover and reload WASM extensions (picks up rebuilt wasm)
   --reload-extension <name>

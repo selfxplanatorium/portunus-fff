@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 bun tauri dev                                    # dev mode (hot reload)
 bun tauri build                                  # production build (OCR always on; needs libtesseract-dev + libleptonica-dev; linuxdeploy for AppImage)
 cargo check --manifest-path src-tauri/Cargo.toml --workspace # type-check Rust only (fastest inner loop, ~3s)
-cargo test --manifest-path src-tauri/Cargo.toml --workspace  # unit tests (inline #[cfg(test)]: breaker, calc/datetime, extensions/trigger, command, office, text)
+cargo test --manifest-path src-tauri/Cargo.toml --workspace  # unit tests (inline #[cfg(test)] modules: providers incl. files/ranking/calc, extensions, office, text, …)
 bun x tsc --noEmit                               # type-check TypeScript only
 ```
 
@@ -67,9 +67,11 @@ Tauri commands are registered in `lib.rs` (`invoke_handler` near the bottom list
 
 **Config** (`config.rs`, defaults in `default_config.toml`) — TOML at `~/.config/portunus/config.toml`. Hot-reloaded via `watcher.rs`; `provider_reload.rs` rebuilds affected providers and emits `search-invalidated`. Pre-release project: breaking config-schema changes are fine, no migration code needed.
 
-**IPC** (`ipc.rs`) — Unix socket at `$XDG_RUNTIME_DIR/portunus.sock`; CLI flags from a second instance: `--show`, `--close`, `--toggle`, `--clipboard`, `--reindex`, `--reload-config`, `--reload-extensions`, `--reload-extension <name>`, `--reload-theme` (`cli.rs`).
+**IPC** (`ipc.rs`) — Unix socket at `$XDG_RUNTIME_DIR/portunus.sock`; CLI flags from a second instance: `--show`, `--close`, `--toggle`, `--clipboard`, `--reindex` (content index + file-root rescan), `--reload-config`, `--reload-extensions`, `--reload-extension <name>`, `--reload-theme` (`cli.rs`).
 
 **Extensions** (`extensions/`, wire contract in `extension-sdk/`, **api = 5**, docs in `EXTENSIONS.md`) — sandboxed Extism/wasm providers. Manifest v5 declares `[[commands]]` (searchable launcher entries, `mode = "scope"` or `"action"`), `[permissions]` (incl. `bus` = companion-process channel), `[limits]`, `[background]`, `[[settings]]` (including `secret` type stored via keyring, `secrets.rs`). Guest exports: `search` (sync fast path), `query` (async/streaming), `activate` (returns declarative effects: copy_text/open_url/show_toast/show_form/paste/hide/keep_open/refresh_results/set_query/spawn_process), `preview` (lazy, streamable), `refresh` (background). Key host pieces: `manifest.rs` (parse/validate), `install.rs` (`.portext` two-phase install, consents.toml permission snapshots, update check), `hostfns.rs` (kv/clipboard/open_url/settings/emit/bus), `bus.rs` (companion message bus over the `ext-attach:<name>` socket channel; `native_host.rs` = browser native-messaging shim, `portunus native-host`), `query.rs` (async query tier), `logs.rs` (per-extension ring buffer for Settings), `providers/wasm.rs` (instance slots, output-size caps), `providers/breaker.rs` (3-strike failure breaker with escalating cooldown). Developer CLI: `portunus ext new/dev/validate/pack` (`cli_ext.rs`, scaffolds from `templates/extension/`). Reference extensions live in the separate `portunus-extensions` repo (https://github.com/SzilBalazs/portunus-extensions): emoji = offline scope, cheatsh = network+cache+refresh, gh = multi-command/secrets/streaming/forms.
+
+**Update check** (`app_update.rs`) — polls this fork's GitHub releases (`selfxplanatorium/portunus`), never upstream's.
 
 **Startup** — `CalcProvider` registers synchronously; `AppProvider` loads in a background thread, where the file index also spawns its fff scans (non-blocking; `search-invalidated` fires when they land); `apps-ready` event clears the frontend loading state. A tiny embedded PDF (`warmup.pdf`) is rendered at startup to prime fontconfig.
 
@@ -87,7 +89,7 @@ Tauri commands are registered in `lib.rs` (`invoke_handler` near the bottom list
 
 **Provider plugin pattern** (`providers/registry.ts` + `providers/*.tsx`) — each result kind registers `{ kinds, Preview, handleLaunch, handleKeyDown }` via `registerProvider()`; `App.tsx` dispatches through the registry. New result kinds get a new provider registration, not special cases in App.tsx.
 
-**Settings.tsx** — sidebar sections (General, Providers, Clipboard, Files, Dict, Ranking, Content, Extensions, Appearance, Debug). Autosaves cheap edits with 800 ms debounce; heavy content-index fields (dirs, extensions list, OCR options, size increases) are staged behind "Apply & Reindex". **Always build settings UI from the shared primitives** in `components/settings/` — `SettingsField`, `SettingsGroup`, `SectionHeader`, `Toggle`, `TextInput`, `Select`, `Slider`, `NumberStepper`, `Badge`, `Modal` — never bespoke per-file markup.
+**Settings.tsx** — sidebar sections (General, Keybinds, Providers, Clipboard, Extensions, Dict, Files, Ranking, Content, Appearance, Debug, About). Autosaves cheap edits with 800 ms debounce; heavy content-index fields (dirs, extensions list, OCR options, size increases) are staged behind "Apply & Reindex". **Always build settings UI from the shared primitives** in `components/settings/` — `SettingsField`, `SettingsGroup`, `SectionHeader`, `Toggle`, `TextInput`, `Select`, `Slider`, `NumberStepper`, `Badge`, `Modal` — never bespoke per-file markup.
 
 **Styling** — plain CSS (`App.css`, `settings.css`, `themes.css`), no CSS modules/frameworks. Theme via CSS custom properties on `:root`; named themes as `:root[data-theme="…"]`; Matugen CSS injected at runtime (`theme.ts`). Behavior toggles ride data attributes (`data-animate-results`, `data-accent-bleed`, …). Use existing tokens (`--accent`, `--bg-*`, `--fg-*`) instead of hard-coded colors. Fonts go through `--font-ui` / `--font-mono` (never a literal stack; `[appearance] font_family`/`mono_font_family` override them in `theme.ts`). `[appearance] opacity` fades the launcher's surface tokens (`--bg-card`, `--bg-preview`, …) inline in `theme.ts`; `blur` is compositor work (`layer_shell::apply_compositor_blur`, Hyprland via hyprctl). Window motion ("window motion" block in `App.css`): `.launcher[data-expanded]` morphs the card between the 62px bar and full height by animating only `.card` height (`.card-clip` stays full size, so contents never re-layout); `data-enter` alternates per show to restart the entrance keyframes; `data-phase="hidden"` (set on `visibilitychange`) parks the card invisible between shows.
 
@@ -97,7 +99,7 @@ Tauri commands are registered in `lib.rs` (`invoke_handler` near the bottom list
 
 ### Two-window setup
 
-`tauri.conf.json` defines two windows: `main` (900×576, hidden at startup) and `settings` (800×560, pre-created hidden, shown via `open_settings_window`). Both are WebKit2GTK 4.1 WebViews. Asset protocol is enabled to load system icons from `~/.local/share/icons` and XDG icon dirs.
+`tauri.conf.json` defines `main` (960×640, transparent, hidden at startup); `settings` (1000×620) is built in `lib.rs` setup, pre-created hidden and shown via `open_settings_window`. Both are WebKit2GTK 4.1 WebViews. Asset protocol is enabled to load system icons from `~/.local/share/icons` and XDG icon dirs.
 
 ## System dependencies
 

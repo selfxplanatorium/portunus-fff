@@ -2,7 +2,8 @@ name: Nix
 
 # Builds the flake package on both Linux architectures and pushes the results to
 # the portunus.cachix.org binary cache, so `nix run github:SzilBalazs/portunus`
-# does not make users compile a Tauri app from scratch. The cache is for
+# does not make users compile a Tauri app from scratch. (That cache belongs to
+# upstream; this fork has no push token, so here the step only reads from it.) The cache is for
 # consumers, not for CI turnaround: Nix builds are all-or-nothing, so unlike the
 # release workflow (which keeps an incremental Rust cache) every source change
 # here is a full rebuild. `packaging/nix/unwrapped.nix` filters `src` down to the

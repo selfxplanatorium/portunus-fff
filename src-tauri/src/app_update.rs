@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 /// A release page is always built locally as `RELEASE_TAG_BASE + tag`; the URL
 /// in the API response is deliberately never deserialized, let alone opened.
-const RELEASE_TAG_BASE: &str = "https://github.com/SzilBalazs/portunus/releases/tag/";
-const LATEST_API_URL: &str = "https://api.github.com/repos/SzilBalazs/portunus/releases/latest";
+const RELEASE_TAG_BASE: &str = "https://github.com/selfxplanatorium/portunus/releases/tag/";
+const LATEST_API_URL: &str = "https://api.github.com/repos/selfxplanatorium/portunus/releases/latest";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Size cap on the fetched release document.
 const MAX_BODY_BYTES: u64 = 256 * 1024;
@@ -498,7 +498,7 @@ mod tests {
         let info = sanitize(release("v0.7.0")).expect("stable numeric tag");
         assert_eq!(info.version, "0.7.0");
         assert_eq!(info.tag, "v0.7.0");
-        assert_eq!(info.url, "https://github.com/SzilBalazs/portunus/releases/tag/v0.7.0");
+        assert_eq!(info.url, "https://github.com/selfxplanatorium/portunus/releases/tag/v0.7.0");
     }
 
     #[test]

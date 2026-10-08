@@ -270,6 +270,41 @@ bind = SUPER, V, exec, /path/to/portunus --clipboard
 
 On first launch Portunus writes a default config to `~/.config/portunus/config.toml`. Config changes are hot-reloaded without a restart.
 
+### File search
+
+Each `[[files.dirs]]` entry is one fff root, crawled to full depth. `/` stands
+for every top-level directory except `/proc`, `/sys`, `/dev`, `/run`, `/tmp`;
+a path inside a more specific root is served only by that root.
+
+```toml
+[files]
+show_dotfiles = false
+ignore = ["node_modules", "target", ".git", ".cache", "__pycache__", ".venv"]  # hidden from results
+
+[[files.dirs]]
+path  = "~"
+watch = true    # live via inotify (one watch per directory)
+
+[[files.dirs]]
+path  = "/"
+watch = false   # refreshed on startup, config change and `portunus --reindex`
+```
+
+### Appearance
+
+Everything here is also in **Settings → Appearance**:
+
+```toml
+[appearance]
+theme             = "warm-dark"
+font_size         = 13       # whole-UI scale
+font_family       = ""       # "" = built-in stack; any installed family otherwise
+mono_font_family  = ""
+opacity           = 1.0      # background panels, 0.3 .. 1.0
+blur              = false    # compositor blur behind the launcher (applied via hyprctl on Hyprland)
+window_animations = true     # entrance + search-bar-to-window morph
+```
+
 ### Themes
 
 Pick a theme in **Settings → Appearance**. Eight dark themes ship built-in, plus a Matugen theme that pulls its colors from your wallpaper.
@@ -340,7 +375,7 @@ portunus [FLAG]
   --close             Close the launcher window (signals a running instance)
   --toggle            Toggle the launcher window (signals a running instance)
   --clipboard         Show the launcher pre-filled with "clipboard"
-  --reindex           Rebuild the content search index
+  --reindex           Rebuild the content index and re-walk the file roots
   --reload-config     Reload config from file without restarting
   --reload-extensions Re-discover and reload WASM extensions (picks up rebuilt wasm)
   --reload-theme      Re-read the external matugen.css theme (matugen post_hook)
