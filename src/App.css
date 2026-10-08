@@ -58,6 +58,13 @@ html, body, #root {
 
   --text-on-accent: #1a1310;
 
+  /* Accent bleed (App.tsx) overrides these inline with the selected result's
+     sampled color. The defaults keep accent-filled controls painted before the
+     first override and if it never comes. Resolved per theme: --accent is
+     redefined on the same element by :root[data-theme]. */
+  --item-accent:    var(--accent);
+  --item-on-accent: var(--text-on-accent);
+
   --danger-bg:      #6b2a1e;
   --danger-bg-dim:  #3d1c18;
   --danger-fg:      #f0c8be;
@@ -954,6 +961,27 @@ kbd {
   border: 1px solid var(--border);
   border-radius: 4px;
   font: 500 10px/1 var(--font-mono);
+}
+
+/* Optical centering for text keys. A grid centers the line box, and the line
+   box carries the font's descender space, so short words ("ctrl", "shift") sat
+   above the icon keys (↵, ⌫), by an amount that depends on the mono font.
+   Text-only keys become a block whose first line is trimmed to cap height ..
+   baseline, then padded so that band sits exactly in the middle: centered for
+   any configured font. (text-box-trim only applies to block containers, hence
+   inline-block instead of the grid.) Icon keys keep the grid. */
+@supports (text-box: trim-both cap alphabetic) {
+  kbd:not(:has(svg)) {
+    display: inline-block;
+    box-sizing: border-box;
+    text-align: center;
+    line-height: 1;
+    text-box: trim-both cap alphabetic;
+    padding-top: calc((18px - 2px - 1cap) / 2);
+  }
+}
+@supports not (text-box: trim-both cap alphabetic) {
+  kbd:not(:has(svg)) { padding-top: 1px; }
 }
 
 /* ---------- file / folder preview ---------- */

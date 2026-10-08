@@ -1,33 +1,94 @@
 <div align="center">
 
-<img src="portunus-icon.svg" alt="Portunus" width="120" />
+<img src="portunus-icon.svg" alt="portunus-fff" width="120" />
 
-# Portunus
+# portunus-fff
 
-**A keyboard-first application launcher and search tool for Wayland.**
+**A keyboard-first application launcher and search tool for Wayland, with whole-disk file search powered by [fff](https://github.com/dmtrKovalenko/fff).**
+
+A fork of [SzilBalazs/portunus](https://github.com/SzilBalazs/portunus).
 
 Find and launch apps, jump to files, do quick math, look up a word, dig through
 your clipboard history, or search the text inside your documents. One box, no mouse.
 
-[![Release](https://img.shields.io/github/v/release/SzilBalazs/portunus?style=flat-square)](https://github.com/SzilBalazs/portunus/releases)
+[![Upstream](https://img.shields.io/badge/fork%20of-SzilBalazs%2Fportunus-555?style=flat-square)](https://github.com/SzilBalazs/portunus)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE.txt)
 [![Wayland](https://img.shields.io/badge/Wayland-native-1793D1?style=flat-square)](#compositor-setup)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%20%2B%20Rust-FFC131?style=flat-square)](https://tauri.app)
 
-[Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Themes](#themes) · [Extensions](#extensions) · [Building](#building-from-source)
+[What's different](#whats-different-in-this-fork) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Themes](#themes) · [Extensions](#extensions) · [Building](#building-from-source)
 
-<video src="https://github.com/user-attachments/assets/16089ec3-737b-4b20-96c9-b89aa615c4b2" width="720" controls muted></video>
-
-<img src=".github/assets/hero.png" alt="Portunus launcher" width="720" />
+<img src=".github/assets/hero.png" alt="portunus-fff launcher" width="720" />
 
 </div>
 
 It stays out of your way. The window is hidden until you hit your keybind, and it
 vanishes again the second you launch something or press Escape.
 
+## What's different in this fork
+
+portunus-fff tracks upstream Portunus and changes three things: the file search
+engine, the appearance options, and a handful of UI fixes. The binary, CLI and
+config file are unchanged (`portunus`, `~/.config/portunus/config.toml`), so it
+is a drop-in replacement.
+
+### File search on fff
+
+The upstream file provider walked a few configured folders two levels deep and
+fuzzy-matched file names. This fork replaces it with
+[fff](https://github.com/dmtrKovalenko/fff), a file-search engine built for
+large trees:
+
+- **Whole disk by default.** The default config indexes `~` (kept live) and
+  `/` (every top-level directory except `/proc`, `/sys`, `/dev`, `/run`,
+  `/tmp`), crawled to full depth. There is no depth limit to tune.
+- **Typo tolerant.** `meetng notes` finds `meeting-notes.md`; `invocie` finds
+  `invoice.pdf`. Matching scores the whole path, with a bonus when the hit lands
+  in the file name.
+- **Live index.** Watched folders stay current through per-directory inotify
+  watches instead of re-walking a subtree on every change. Huge, rarely-changing
+  roots can opt out (`watch = false`) and refresh on startup, on config change
+  and on `portunus --reindex`.
+- **Smarter skipping.** The walk honors `.gitignore`/`.ignore` files and skips
+  common build and cache trees (`node_modules`, virtualenvs, `target/debug`, …).
+
+Measured on a synthetic 1.5M-file tree against the upstream engine with its
+depth limit removed (release builds, 4-core machine):
+
+| | upstream engine | fff |
+|---|---|---|
+| Memory | ~490 MB | ~275–460 MB |
+| Building the index | 15 s | 5–9 s |
+| Typo tolerance | no | yes |
+| Per keystroke | 100–155 ms | 50–280 ms |
+
+At this scale fff is lighter and indexes faster, but per-keystroke search is
+slower on most queries, because it scores full paths with typo tolerance
+instead of bare file names. On a typical home folder (tens of thousands of
+files), both answer in roughly 10 ms or less.
+
+### Appearance
+
+New options under **Settings → Appearance**:
+
+- **Opacity**: fade the launcher's background panels (30%–solid). Text, icons
+  and the selection stay solid.
+- **Blur behind**: on Hyprland the blur rule is applied at runtime via
+  `hyprctl`; for other compositors, Settings shows the rule to add yourself.
+- **Fonts**: pick the interface and monospace fonts from your installed fonts.
+
+### Cleaner UI
+
+- No colored accent bar on selected and hovered rows.
+- No product name and version in the launcher footer; just the settings icon.
+- Key hints are optically centered for any font, so `ctrl`/`shift`/`alt` line up
+  with the `↵` keys.
+- Accent-colored buttons (e.g. **Open**) no longer render transparent when the
+  first result you select is a file.
+
 ## Features
 
-- 🔍 **Fuzzy app & file search**: apps (`.desktop` entries) plus every file and folder on your disk, indexed and kept live by [fff](https://github.com/dmtrKovalenko/fff) (typo-tolerant, milliseconds over millions of paths), ranked by how often you actually open them
+- 🔍 **Fuzzy app & file search**: apps (`.desktop` entries) plus every file and folder on your disk, indexed and kept live by [fff](https://github.com/dmtrKovalenko/fff) (typo-tolerant), ranked by how often you actually open them
 - 🧮 **Inline calculator**: math (`log2(10^8)`), unit conversion (`5km to mi`), currency (`100 usd to eur`), date math (`days until dec 25`), and timezones (`3pm est in cet`)
 - 📖 **Dictionary lookup**: `define serendipity`, `dict serendipity`, or `dictionary serendipity` (needs the `dict` client; queries dict.org unless you run a local `dictd`)
 - 📋 **Clipboard history**: full-text search back through your `cliphist` entries (Wayland)
@@ -49,7 +110,8 @@ vanishes again the second you launch something or press Escape.
 
 ## Install
 
-Download a package from the [Releases page](https://github.com/SzilBalazs/portunus/releases). All of them are **x86_64 only**.
+Download a package from this fork's [Releases page](https://github.com/selfxplanatorium/portunus/releases)
+(the upstream releases do not include the fff engine). All of them are **x86_64 only**.
 On other architectures use the Nix flake or build from source.
 
 ### Arch Linux
@@ -59,7 +121,7 @@ the prebuilt `.deb` above. Its `sha256sum` is filled in by CI at release time, s
 there is nothing to edit:
 
 ```bash
-curl -fLO https://github.com/SzilBalazs/portunus/releases/latest/download/PKGBUILD
+curl -fLO https://github.com/selfxplanatorium/portunus/releases/latest/download/PKGBUILD
 makepkg -si
 ```
 
@@ -122,10 +184,11 @@ build such as `pdfium-bin`, and tesseract with the language data you want
 ### Nix (flake)
 
 ```bash
-nix run github:SzilBalazs/portunus
+nix run github:selfxplanatorium/portunus
 ```
 
-Prebuilt binaries come from `portunus.cachix.org`. Nix applies a flake's own
+The `portunus.cachix.org` cache below holds upstream builds, not this fork's, so
+expect Nix to build portunus-fff from source. Nix applies a flake's own
 substituter list only for trusted users, so unless you are one, add the cache to
 your configuration. Without it Nix quietly builds the whole app from source:
 
@@ -142,7 +205,7 @@ nix.settings = {
 For a one-off run, `--accept-flake-config` does the same job:
 
 ```bash
-nix run --accept-flake-config github:SzilBalazs/portunus
+nix run --accept-flake-config github:selfxplanatorium/portunus
 ```
 
 The wrapper puts libpdfium, the poppler tools, cliphist, wl-clipboard, wtype, the

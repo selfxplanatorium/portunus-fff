@@ -1304,7 +1304,9 @@ export default function App() {
   // 126ms vs 37ms of paint per move on a 150-row list. Under a held key the hue
   // now lands on the row the user stops on instead of strobing through every row
   // passed over; a discrete keypress still commits immediately.
-  const bleedRef = useRef("");
+  // null, not "": "" is the no-color value, so starting there skipped the first
+  // write when the first selected result had no sampled color (a file).
+  const bleedRef = useRef<string | null>(null);
   useEffect(() => {
     const root = document.documentElement;
     const hex = accentBleed !== "off" ? previewResult?.dominant_color : undefined;
