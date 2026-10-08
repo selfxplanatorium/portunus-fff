@@ -67,6 +67,7 @@ export function applyTheme(appearance: Config["appearance"]) {
   root.dataset.showMetadata = String(appearance.show_metadata ?? true);
   root.dataset.slideSelection = String(appearance.slide_selection ?? true);
   root.dataset.accentBleed = String(appearance.accent_bleed ?? "subtle");
+  root.dataset.windowMotion = appearance.window_animations === false ? "off" : "on";
   root.style.setProperty("--grain-opacity", String(appearance.grain ?? 0.07));
   // matugen's token values arrive with its stylesheet, so fade after injecting.
   if (appearance.theme === MATUGEN_THEME) {

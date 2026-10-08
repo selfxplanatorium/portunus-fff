@@ -120,6 +120,123 @@ html, body, #root {
   overflow: hidden;
 }
 
+/* ---------- window motion ----------
+   The card is a bare search bar until there is something to show, then morphs
+   into the full window (App.tsx: data-expanded on .launcher). Only the card's
+   own height animates: .card-clip keeps the full-window size underneath, so
+   the results, preview and footer never re-layout mid-morph; the card simply
+   uncovers them. clip-path (not overflow + radius) rounds the moving bottom
+   edge, which WebKit2GTK otherwise leaves square over composited children.
+
+   Choreography: expanding rides a sheet curve (fast start, long settle) and the
+   content follows a beat later; collapsing is quicker on an ease-in, with the
+   content leaving first. The entrance (every show) drops in 12px with a slight
+   scale while the icon and input text trail by a few frames. */
+.launcher {
+  --card-full: calc(100vh - 16px);
+  --card-bar:  62px;                       /* 60px search bar + 2px border */
+  --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-quick: cubic-bezier(0.4, 0, 1, 1);
+}
+
+.launcher .card {
+  flex: none;
+  height: var(--card-full);
+  clip-path: inset(0 round var(--radius));
+  transform-origin: 50% 0;
+  transition: height 0.42s var(--ease-sheet);
+}
+.launcher .card-clip { height: calc(var(--card-full) - 2px); }  /* width still flexes */
+
+.launcher[data-expanded="false"] .card {
+  height: var(--card-bar);
+  transition-duration: 0.28s;
+}
+
+/* Everything below the bar follows the morph. */
+.launcher .card-clip > :not(.search-bar) {
+  transition:
+    opacity 0.26s var(--ease-out-expo) 0.09s,
+    transform 0.38s var(--ease-out-expo) 0.06s;
+}
+.launcher[data-expanded="false"] .card-clip > :not(.search-bar) {
+  opacity: 0;
+  transform: translateY(-8px);
+  transition:
+    opacity 0.12s var(--ease-in-quick),
+    transform 0.16s var(--ease-in-quick);
+}
+/* The bar's divider would double the card border while collapsed. */
+.launcher .search-bar { transition: border-color 0.2s ease; }
+.launcher[data-expanded="false"] .search-bar { border-bottom-color: transparent; }
+
+/* Entrance. Two identical keyframes: App.tsx alternates data-enter on every
+   show, which restarts the animation without remounting the card. */
+@keyframes card-enter-0 {
+  from { opacity: 0; transform: translateY(-12px) scale(0.965); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes card-enter-1 {
+  from { opacity: 0; transform: translateY(-12px) scale(0.965); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bar-icon-enter-0 {
+  from { opacity: 0; transform: scale(0.6) rotate(-25deg); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bar-icon-enter-1 {
+  from { opacity: 0; transform: scale(0.6) rotate(-25deg); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bar-text-enter-0 {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes bar-text-enter-1 {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+.launcher[data-enter="0"] .card { animation: card-enter-0 0.34s var(--ease-out-expo) both; }
+.launcher[data-enter="1"] .card { animation: card-enter-1 0.34s var(--ease-out-expo) both; }
+.launcher[data-enter="0"] .search-icon { animation: bar-icon-enter-0 0.46s var(--ease-out-expo) 0.07s both; }
+.launcher[data-enter="1"] .search-icon { animation: bar-icon-enter-1 0.46s var(--ease-out-expo) 0.07s both; }
+.launcher[data-enter="0"] .search-input-area { animation: bar-text-enter-0 0.4s var(--ease-out-expo) 0.11s both; }
+.launcher[data-enter="1"] .search-input-area { animation: bar-text-enter-1 0.4s var(--ease-out-expo) 0.11s both; }
+
+/* Hidden window: hold the card invisible so the next show starts from nothing. */
+.launcher[data-phase="hidden"] .card { opacity: 0; animation: none; transition: none; }
+
+/* Small pieces that appear inside the bar. */
+@keyframes chip-in {
+  from { opacity: 0; transform: scale(0.85); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes calc-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: none; }
+}
+.search-hint-chip { animation: chip-in 0.24s var(--ease-out-expo, ease-out) both; transform-origin: 0 50%; }
+.calc-inline { animation: calc-in 0.26s var(--ease-out-expo, ease-out) both; }
+
+/* Off switch ([appearance] window_animations) and reduced motion: same states, no motion. */
+:root[data-window-motion="off"] .launcher .card,
+:root[data-window-motion="off"] .launcher .card-clip > *,
+:root[data-window-motion="off"] .launcher .search-bar {
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
+}
+:root[data-window-motion="off"] .launcher .card,
+:root[data-window-motion="off"] .launcher .search-icon,
+:root[data-window-motion="off"] .launcher .search-input-area,
+:root[data-window-motion="off"] .search-hint-chip,
+:root[data-window-motion="off"] .calc-inline { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .launcher .card, .launcher .card-clip > *, .launcher .search-bar { transition: none; }
+  .launcher .card, .launcher .search-icon, .launcher .search-input-area,
+  .search-hint-chip, .calc-inline { animation: none; }
+}
+
 /* Inner clip layer. clip-path reliably clips composited descendants (filters,
    FLIP transforms, translateZ layers) to the rounded corners, which plain
    overflow:hidden + border-radius does NOT in WebKit2GTK - that bug squared off

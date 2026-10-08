@@ -77,6 +77,15 @@ New options under **Settings → Appearance**:
   `hyprctl`; for other compositors, Settings shows the rule to add yourself.
 - **Fonts**: pick the interface and monospace fonts from your installed fonts.
 
+### Motion
+
+The launcher opens as a bare search bar and grows into the results window as
+you type, then folds back when you clear the query. The bar drops in on every
+show, with the search icon and text trailing a few frames behind; results,
+preview and footer fade in after the card starts to grow and leave before it
+shrinks. **Settings → Appearance → Window animations** turns it all off, and
+reduced-motion system settings are respected.
+
 ### Cleaner UI
 
 - No colored accent bar on selected and hovered rows.

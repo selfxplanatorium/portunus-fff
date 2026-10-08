@@ -101,6 +101,8 @@ export interface Config {
     opacity: number;
     /** Ask the compositor to blur behind translucent surfaces. */
     blur: boolean;
+    /** Entrance + bar/window morph animations. */
+    window_animations: boolean;
   };
   keybinds: KeybindsConfig;
   /** Per-extension state keyed by name. Absent = disabled. */

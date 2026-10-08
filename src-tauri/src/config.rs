@@ -596,6 +596,9 @@ pub struct AppearanceConfig {
     /// Ask the compositor to blur behind translucent surfaces (see
     /// `layer_shell::apply_compositor_blur`).
     pub blur: bool,
+    /// Animate the launcher window: entrance on show, and the morph between
+    /// the bare search bar and the full results window. Off = instant.
+    pub window_animations: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -612,6 +615,7 @@ impl Default for AppearanceConfig {
             mono_font_family: String::new(),
             opacity: 1.0,
             blur: false,
+            window_animations: true,
         }
     }
 }

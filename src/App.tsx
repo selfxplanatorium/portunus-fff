@@ -162,6 +162,12 @@ export default function App() {
   // Form pinned by a ShowForm activate effect (null = closed). Modal like the
   // action picker; pins the result so background reorders can't retarget it.
   const [extForm, setExtForm] = useState<ActiveExtForm | null>(null);
+  // Window motion. `enterSeq` restarts the entrance animation on every show
+  // (its parity alternates two identical keyframes, so no remount is needed);
+  // `hiddenPhase` parks the card invisible while the window is hidden, so the
+  // next show starts from nothing instead of flashing the last frame.
+  const [enterSeq, setEnterSeq] = useState(0);
+  const [hiddenPhase, setHiddenPhase] = useState(false);
   // True while a form submit's activate call is in flight (locks the form).
   const [formBusy, setFormBusy] = useState(false);
   // True while an opens_form activation runs with the window kept visible
@@ -316,6 +322,13 @@ export default function App() {
   // its own effect (not the main keydown handler, which early-returns in
   // clipboard/onboarding modes - badges must work there too) and writes the
   // attribute imperatively so holding Alt never re-renders the tree.
+  // Park the card invisible as the window hides; window-show brings it back in.
+  useEffect(() => {
+    const onVis = () => { if (document.hidden) setHiddenPhase(true); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
   // Alt+digit hides the window while Alt is still down, so the keyup lands in
   // another app - blur/visibility/focus handlers clear the stuck state.
   useEffect(() => {
@@ -417,6 +430,8 @@ export default function App() {
   }, []);
 
   useTauriListener("window-show", () => {
+    setHiddenPhase(false);
+    setEnterSeq(s => s + 1);
     focusedRef.current = true;
     delete document.documentElement.dataset.altHeld;
     selection.clear();
@@ -463,6 +478,8 @@ export default function App() {
   }, []);
 
   useTauriListener<string>("window-show-query", payload => {
+    setHiddenPhase(false);
+    setEnterSeq(s => s + 1);
     // `portunus --clipboard` sends "clipboard " - open the dedicated browser
     // instead of pre-filling the launcher query.
     if (payload.trim() === "clipboard") { enterClipboardMode("", true); return; }
@@ -1493,9 +1510,18 @@ export default function App() {
 
   const contentSized = calcResult != null;
 
+  // The card is a bare search bar until there is something to show, then
+  // morphs into the full results window (App.css: "window motion").
+  const expanded = hasSearchTerm || inClipboard || actionPanel != null || quickResult != null || extForm != null;
+
   return (
     <ColoredIconsContext.Provider value={coloredIcons}>
-    <div className="launcher">
+    <div
+      className="launcher"
+      data-expanded={expanded}
+      data-phase={hiddenPhase ? "hidden" : "shown"}
+      data-enter={enterSeq % 2}
+    >
       {showOnboarding && onboardConfig && (
         <OnboardingWizard
           config={onboardConfig}

@@ -169,6 +169,10 @@ export default function AppearanceSection({ config, onChange }: Props) {
           />
         </SettingsField>
 
+        <SettingsField name="Window animations" desc="The launcher drops in on show and grows from the search bar into the results window as you type. Off makes both instant.">
+          <Toggle label="Window animations" checked={config.appearance.window_animations ?? true} onChange={v => set({ window_animations: v })} />
+        </SettingsField>
+
         <SettingsField name="Blur behind" desc={blurHint}>
           <Toggle label="Blur behind" checked={config.appearance.blur ?? false} onChange={v => set({ blur: v })} />
         </SettingsField>
