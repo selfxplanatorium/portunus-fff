@@ -275,8 +275,16 @@ impl Default for DictConfig {
 #[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 pub struct DirEntry {
     pub path: String,
-    #[serde(default = "default_depth")]
-    pub depth: usize,
+    /// Keep the index current with per-directory inotify watches. Off for huge
+    /// trees that rarely change (`/`): they are re-walked on startup, on a
+    /// config change and on `--reindex` instead of costing an inotify watch per
+    /// directory.
+    #[serde(default = "default_true")]
+    pub watch: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_depth() -> usize {
@@ -286,12 +294,14 @@ fn default_depth() -> usize {
 #[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct FilesConfig {
+    /// Roots indexed by fff, crawled to full depth. `/` stands for every
+    /// top-level directory except pseudo filesystems (/proc, /sys, ...).
     pub dirs: Vec<DirEntry>,
     pub show_dotfiles: bool,
     pub colored_icons: bool,
-    /// Directory names pruned from the walk, matched exactly against a path
-    /// component. Build and cache trees dwarf a home directory's real contents,
-    /// and every entry they contribute is scored on every keystroke.
+    /// Extra directory names hidden from results, matched exactly against a
+    /// path component. fff already prunes gitignored trees and common
+    /// build/cache dirs during its walk.
     pub ignore: Vec<String>,
 }
 
@@ -307,12 +317,10 @@ fn default_ignore() -> Vec<String> {
 
 impl Default for FilesConfig {
     fn default() -> Self {
-        let home = crate::paths::home();
         Self {
             dirs: vec![
-                DirEntry { path: format!("{home}/Downloads"), depth: 2 },
-                DirEntry { path: format!("{home}/Documents"), depth: 2 },
-                DirEntry { path: format!("{home}/.config/hypr"), depth: 2 },
+                DirEntry { path: "~".into(), watch: true },
+                DirEntry { path: "/".into(), watch: false },
             ],
             show_dotfiles: false,
             colored_icons: true,
@@ -322,12 +330,11 @@ impl Default for FilesConfig {
 }
 
 impl FilesConfig {
-    /// True when the index-affecting fields match. `colored_icons` is a
-    /// display-only flag, so a change to it must not trigger a file re-walk.
+    /// True when the fields that decide which pickers run match. Display and
+    /// per-search filters (`colored_icons`, `show_dotfiles`, `ignore`) apply on
+    /// the next keystroke without touching the index.
     pub fn index_eq(&self, other: &Self) -> bool {
         self.dirs == other.dirs
-            && self.show_dotfiles == other.show_dotfiles
-            && self.ignore == other.ignore
     }
 }
 
@@ -603,6 +610,8 @@ impl Default for AppearanceConfig {
 pub struct SharedSearchConfig {
     pub min_quality: f32,
     pub show_dotfiles: bool,
+    /// `[files] ignore`: filtered per search, so editing it needs no re-walk.
+    pub files_ignore: Vec<String>,
     pub log_scores: bool,
     pub log_watcher: bool,
     pub log_pdf: bool,
@@ -615,6 +624,7 @@ impl SharedSearchConfig {
         Self {
             min_quality: cfg.search.min_quality,
             show_dotfiles: cfg.files.show_dotfiles,
+            files_ignore: cfg.files.ignore.clone(),
             log_scores: cfg.debug.log_scores,
             log_watcher: cfg.debug.log_watcher,
             log_pdf: cfg.debug.log_pdf,
@@ -624,6 +634,7 @@ impl SharedSearchConfig {
     pub fn update_from(&mut self, cfg: &Config) {
         self.min_quality = cfg.search.min_quality;
         self.show_dotfiles = cfg.files.show_dotfiles;
+        self.files_ignore = cfg.files.ignore.clone();
         self.log_scores = cfg.debug.log_scores;
         self.log_watcher = cfg.debug.log_watcher;
         self.log_pdf = cfg.debug.log_pdf;

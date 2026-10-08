@@ -27,7 +27,7 @@ vanishes again the second you launch something or press Escape.
 
 ## Features
 
-- 🔍 **Fuzzy app & file search**: apps (`.desktop` entries) plus the files and folders you index, ranked by how often you actually open them
+- 🔍 **Fuzzy app & file search**: apps (`.desktop` entries) plus every file and folder on your disk, indexed and kept live by [fff](https://github.com/dmtrKovalenko/fff) (typo-tolerant, milliseconds over millions of paths), ranked by how often you actually open them
 - 🧮 **Inline calculator**: math (`log2(10^8)`), unit conversion (`5km to mi`), currency (`100 usd to eur`), date math (`days until dec 25`), and timezones (`3pm est in cet`)
 - 📖 **Dictionary lookup**: `define serendipity`, `dict serendipity`, or `dictionary serendipity` (needs the `dict` client; queries dict.org unless you run a local `dictd`)
 - 📋 **Clipboard history**: full-text search back through your `cliphist` entries (Wayland)

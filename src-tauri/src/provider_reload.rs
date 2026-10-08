@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use crate::extensions::kv::ExtensionKv;
 use crate::{
-    config, content_index, providers, ContentWatcherTx, FileWatcherTx, FrecencyState, Registry,
-    SharedFileEntries,
+    config, content_index, providers, ContentWatcherTx, FrecencyState, Registry,
+    SharedFileIndex,
 };
 
 /// Spawn a thread that calls `build()` to produce an optional provider, replaces
@@ -38,8 +37,7 @@ pub fn rebuild_providers(
     content_watcher_tx: &ContentWatcherTx,
     notify_cb: &Arc<dyn Fn() + Send + Sync>,
     keybinds_cb: &Arc<dyn Fn(&config::KeybindsConfig) + Send + Sync>,
-    file_entries: &SharedFileEntries,
-    file_watcher_tx: &FileWatcherTx,
+    file_index: &SharedFileIndex,
     ext_kv: &Arc<ExtensionKv>,
     frecency: &FrecencyState,
 ) {
@@ -72,65 +70,30 @@ pub fn rebuild_providers(
         || new_cfg.providers.files != old_cfg.providers.files;
     if files_index_changed {
         let files_cfg = new_cfg.files.clone();
-        let old_files_cfg = old_cfg.files.clone();
         let was_enabled = old_cfg.providers.files;
         let now_enabled = new_cfg.providers.files;
         let shared2 = Arc::clone(shared);
         let reg2 = Arc::clone(registry);
         let ncb = Arc::clone(notify_cb);
-        let fe = Arc::clone(file_entries);
-        let fw_tx = Arc::clone(file_watcher_tx);
+        let index = Arc::clone(file_index);
         std::thread::spawn(move || {
             if now_enabled {
-                let old_by_path: HashMap<&str, &config::DirEntry> =
-                    old_files_cfg.dirs.iter().map(|d| (d.path.as_str(), d)).collect();
-                let new_by_path: HashMap<&str, &config::DirEntry> =
-                    files_cfg.dirs.iter().map(|d| (d.path.as_str(), d)).collect();
-
-                // Case A: pure additions only - walk new dirs and extend.
-                // Case B: any removal or depth change - full re-walk to avoid
-                //         nested-dir prefix-removal bugs (e.g. removing ~/Docs
-                //         when ~/Docs/Projects is still configured).
-                let only_additions = old_files_cfg.dirs.iter().all(|d| new_by_path.contains_key(d.path.as_str()))
-                    && files_cfg.dirs.iter().all(|d| {
-                        match old_by_path.get(d.path.as_str()) {
-                            Some(old) => old.depth == d.depth,
-                            None => true,
-                        }
-                    });
-
-                if only_additions {
-                    let added_cfg = config::FilesConfig {
-                        dirs: files_cfg.dirs.iter()
-                            .filter(|d| !old_by_path.contains_key(d.path.as_str()))
-                            .cloned()
-                            .collect(),
-                        show_dotfiles: files_cfg.show_dotfiles,
-                        colored_icons: files_cfg.colored_icons,
-                        ignore: files_cfg.ignore.clone(),
-                    };
-                    let new_entries = providers::files::FileProvider::walk_dirs(&added_cfg);
-                    fe.write().unwrap().extend(new_entries);
-                } else {
-                    providers::files::FileProvider::populate(&fe, &files_cfg);
-                }
-
+                // Unchanged roots keep their live index; only added or edited
+                // ones are walked, and `ncb` fires once those scans land.
+                index.configure(&files_cfg, Some(Arc::clone(&ncb)));
                 if !was_enabled {
-                    let p = providers::files::FileProvider::with_entries(Arc::clone(&fe), shared2);
+                    let p = providers::files::FileProvider::new(Arc::clone(&index), shared2);
                     reg2.write().unwrap().replace("files", Some(Box::new(p)));
                 }
             } else {
-                *fe.write().unwrap() = vec![];
                 reg2.write().unwrap().replace("files", None);
-            }
-            if let Some(tx) = fw_tx.lock().unwrap().as_ref() {
-                let _ = tx.send(files_cfg);
+                index.clear();
             }
             eprintln!("[config] files provider rebuilt");
             ncb();
         });
     } else if new_cfg.files != old_cfg.files {
-        // Display-only change (colored_icons): no re-walk, just refresh the UI.
+        // Per-search filters and display flags: applied on the next keystroke.
         notify_cb();
     }
 

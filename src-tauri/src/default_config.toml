@@ -22,20 +22,23 @@ rate_max_age_hours = 24    # refetch exchange rates when the cached ones are old
 show_dotfiles = false  # include files and directories whose path contains a dot-name
 colored_icons = true   # tint file icons by type
 
-# Directory names pruned from the walk, matched against a whole path component.
-# Build and cache trees can outnumber a home directory's real files many times
-# over, and every indexed entry is scored on every keystroke.
+# Extra directory names hidden from results, matched against a whole path
+# component. The fff indexer already skips gitignored trees, dotfiles outside
+# git repos, and common build/cache dirs (node_modules, venv, target/debug, ...).
 ignore = ["node_modules", "target", ".git", ".cache", "__pycache__", ".venv"]
 
-# Directories indexed by the file provider.
-# Each entry requires a `path`; `depth` defaults to 2.
+# Directories indexed by the file provider (fff), crawled to full depth.
+# `watch = true` keeps the index live via inotify (one watch per directory);
+# unwatched roots are re-walked on startup, config change and `portunus --reindex`.
+# `/` means every top-level directory except /proc, /sys, /dev, /run and /tmp;
+# a path inside another root is always served by the more specific root.
 [[files.dirs]]
-path  = "~/Downloads"
-depth = 2
+path  = "~"
+watch = true
 
 [[files.dirs]]
-path  = "~/Documents"
-depth = 2
+path  = "/"
+watch = false
 
 [dict]
 enabled              = true     # dictionary lookup (requires dictd; install: sudo pacman -S dictd)

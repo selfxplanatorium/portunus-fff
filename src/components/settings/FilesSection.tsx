@@ -54,16 +54,16 @@ export default function FilesSection({ config, onChange }: Props) {
       <div className={!enabled ? "settings-disabled" : undefined} aria-hidden={!enabled}>
         <SettingsGroup
           title="Indexed directories"
-          desc={<>Each directory is crawled up to the chosen depth. Use <code>~/</code> for paths relative to your home directory.</>}
+          desc={<>Each directory is crawled to full depth by the fff indexer. <code>~</code> is your home directory; <code>/</code> is the whole disk minus <code>/proc</code>, <code>/sys</code>, <code>/dev</code>, <code>/run</code> and <code>/tmp</code>. The toggle keeps a directory live via inotify; unwatched ones refresh on startup and on <code>portunus --reindex</code>.</>}
         >
           <div className="settings-dir-list">
             {config.files.dirs.map((dir, i) => (
               <DirRow
                 key={i}
                 path={dir.path}
-                depth={dir.depth}
+                watch={dir.watch ?? true}
                 onPathChange={path => updateDir(i, { path })}
-                onDepthChange={depth => updateDir(i, { depth })}
+                onWatchChange={watch => updateDir(i, { watch })}
                 onRemove={() => removeDir(i)}
               />
             ))}
@@ -73,9 +73,9 @@ export default function FilesSection({ config, onChange }: Props) {
                 draft
                 inputRef={draftInputRef}
                 path={draft.path}
-                depth={draft.depth}
+                watch={draft.watch ?? true}
                 onPathChange={path => setDraft({ ...draft, path })}
-                onDepthChange={depth => setDraft({ ...draft, depth })}
+                onWatchChange={watch => setDraft({ ...draft, watch })}
                 onRemove={() => setDraft(null)}
                 onKeyDown={onDraftKey}
                 onCommit={commitDraft}
@@ -84,7 +84,7 @@ export default function FilesSection({ config, onChange }: Props) {
             )}
 
             {draft === null && (
-              <button className="settings-dir-add" onClick={() => setDraft({ path: "", depth: 2 })}>
+              <button className="settings-dir-add" onClick={() => setDraft({ path: "", watch: true })}>
                 <span style={{ fontSize: 14, lineHeight: 1 }}>+</span> Add directory
               </button>
             )}
@@ -92,7 +92,7 @@ export default function FilesSection({ config, onChange }: Props) {
           <SettingsField
             stacked
             name="Ignored directory names"
-            desc="Pruned from the crawl wherever they appear, matched against a whole path component. Build and cache trees can outnumber your real files many times over, and every indexed entry is scored on every keystroke."
+            desc="Hidden from results wherever they appear, matched against a whole path component. The indexer already skips gitignored trees and common build and cache directories; add names here for anything else."
           >
             <TagEditor
               values={config.files.ignore}

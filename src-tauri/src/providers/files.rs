@@ -1,8 +1,20 @@
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
-use std::time::UNIX_EPOCH;
+//! File-name search backed by fff (`fff-search`).
+//!
+//! Every configured root gets its own fff `FilePicker`: a parallel
+//! gitignore-aware walk into a compact arena, an optional per-directory inotify
+//! watcher that keeps it current, and a SIMD typo-tolerant fuzzy matcher that
+//! scores a million paths in tens of milliseconds. This module only maps the
+//! configured roots onto pickers and fff hits onto `SearchResult`s.
 
-use nucleo_matcher::Utf32Str;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+
+use fff_search::file_picker::FilePicker;
+use fff_search::{
+    FFFMode, FilePickerOptions, FuzzySearchOptions, GitRecencyConfig, MixedItemRef,
+    PaginationArgs, QueryParser, SharedFilePicker, SharedFrecency,
+};
 
 use super::{ranking, Provider, SearchResult};
 use crate::config::{FilesConfig, SharedConfig};
@@ -12,215 +24,304 @@ use crate::util;
 /// a name-matched file but still beat the dict-fill band below).
 const FOLDER_OFFSET: f32 = -700_000.0;
 
-/// How many top-scored entries `search` materializes into `SearchResult`s. The
-/// registry only ever shows `max_results` (default 20) of them, but it re-ranks
-/// with frecency and pins afterwards, so the provider hands over enough
-/// headroom for that reordering to matter. Everything past this cut is
-/// unreachable: a one-character query matches nearly every indexed entry, and
-/// building a result for each one cost ~240 ms on a 60k-entry index.
+/// How many top-scored hits `search` materializes into `SearchResult`s. The
+/// registry only ever shows `max_results` of them, but it re-ranks with
+/// frecency and pins afterwards, so the provider hands over enough headroom for
+/// that reordering to matter.
 const CANDIDATE_CAP: usize = 128;
 
-// ── Data types ────────────────────────────────────────────────────────────────
+/// Hits scoring below this fraction of the best hit are dropped. fff is
+/// typo-tolerant, so a short or unrelated query (a calc expression, a command
+/// name) still "matches" thousands of paths; without a floor those would pad
+/// every sparse result list with noise.
+const RELATIVE_FLOOR: f32 = 0.25;
 
-pub struct FileEntry {
-    pub path: String,
-    pub name: String,
-    pub parent: String,
-    pub is_dir: bool,
-    pub file_size: Option<u64>,
-    pub created: Option<u64>,
-    pub modified: Option<u64>,
-    /// Path-static, so they are decided once at walk time rather than per
-    /// keystroke: both used to cost a fresh allocation per entry per search.
-    pub hidden: bool,
-    pub previewable: bool,
+/// Top-level directories skipped when `/` is configured: kernel and runtime
+/// pseudo-filesystems (millions of volatile entries, nothing a user opens by
+/// name) and scratch space.
+const PSEUDO_ROOT_DIRS: &[&str] = &["proc", "sys", "dev", "run", "tmp", "lost+found"];
+
+/// Upper bound on how long the ready-notifier waits for an initial scan.
+const SCAN_WAIT: Duration = Duration::from_secs(30 * 60);
+
+// ── Index ─────────────────────────────────────────────────────────────────────
+
+/// One fff picker over one root directory.
+struct Root {
+    dir: PathBuf,
+    watch: bool,
+    picker: SharedFilePicker,
+    /// More specific configured roots inside this one. Their paths belong to
+    /// them, so the same file is never listed twice and an unwatched `/` can't
+    /// resurface a stale copy of a file the watched `~` already saw deleted.
+    nested: Vec<PathBuf>,
 }
 
-// ── Search provider ───────────────────────────────────────────────────────────
+impl Root {
+    fn spawn(dir: PathBuf, watch: bool) -> Option<Self> {
+        let picker = SharedFilePicker::default();
+        let opts = FilePickerOptions {
+            base_path: dir.to_string_lossy().into_owned(),
+            mode: FFFMode::Neovim,
+            watch,
+            // Roots are chosen explicitly in the config, so `~` is fair game;
+            // `/` itself never reaches fff (see `resolve_roots`).
+            enable_home_dir_scanning: true,
+            // Name search only: no content mmap warmup, no bigram content index,
+            // no git-log ranking. Launch history is portunus' own frecency.
+            enable_mmap_cache: false,
+            enable_content_indexing: false,
+            git_recency: GitRecencyConfig { enabled: false, ..Default::default() },
+            ..Default::default()
+        };
+        match FilePicker::new_with_shared_state(picker.clone(), SharedFrecency::default(), opts) {
+            Ok(()) => Some(Root { dir, watch, picker, nested: vec![] }),
+            Err(e) => {
+                eprintln!("[files] cannot index {}: {e}", dir.display());
+                None
+            }
+        }
+    }
 
-pub struct FileProvider {
-    entries: Arc<RwLock<Vec<FileEntry>>>,
-    shared: SharedConfig,
+    fn shutdown(&self) {
+        self.picker.cancel();
+        self.picker.shutdown_watches();
+        // Dropping the picker stops its scan job, git worker and watcher.
+        if let Ok(mut guard) = self.picker.write() {
+            guard.take();
+        }
+    }
 }
 
-impl FileProvider {
-    pub fn walk_dirs(files_cfg: &FilesConfig) -> Vec<FileEntry> {
-        let roots: Vec<(PathBuf, usize)> = files_cfg
-            .dirs
+/// A hit from one root, before it becomes a `SearchResult`.
+struct Hit {
+    path: String,
+    name: String,
+    parent: String,
+    is_dir: bool,
+    hidden: bool,
+    size: Option<u64>,
+    modified: Option<u64>,
+    score: i32,
+}
+
+/// The live set of fff pickers. Shared between the provider, the config reload
+/// path and `--reindex`; the pickers keep themselves current via their own
+/// watchers.
+#[derive(Default)]
+pub struct FileIndex {
+    roots: RwLock<Vec<Root>>,
+}
+
+impl FileIndex {
+    /// Reconcile the running pickers with `cfg`: roots whose path and watch
+    /// flag are unchanged keep their index, the rest are torn down or spawned.
+    /// `on_ready` fires once every newly spawned root finished its first scan.
+    pub fn configure(&self, cfg: &FilesConfig, on_ready: Option<Arc<dyn Fn() + Send + Sync>>) {
+        let wanted = resolve_roots(cfg);
+        let mut roots = util::write(&self.roots);
+
+        let mut kept: Vec<Root> = Vec::with_capacity(wanted.len());
+        let mut old: Vec<Root> = std::mem::take(&mut *roots);
+        let mut fresh: Vec<SharedFilePicker> = vec![];
+        for (dir, watch) in wanted {
+            if let Some(i) = old.iter().position(|r| r.dir == dir && r.watch == watch) {
+                kept.push(old.swap_remove(i));
+            } else if let Some(root) = Root::spawn(dir, watch) {
+                fresh.push(root.picker.clone());
+                kept.push(root);
+            }
+        }
+        let dirs: Vec<PathBuf> = kept.iter().map(|r| r.dir.clone()).collect();
+        for r in &mut kept {
+            r.nested = dirs
+                .iter()
+                .filter(|d| **d != r.dir && d.starts_with(&r.dir))
+                .cloned()
+                .collect();
+        }
+        *roots = kept;
+        drop(roots);
+        // Outside the lock: dropping a picker waits for its write lock, which a
+        // scan publishing its results may hold for a moment.
+        for r in &old {
+            r.shutdown();
+        }
+
+        if fresh.is_empty() {
+            return;
+        }
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            for p in &fresh {
+                p.wait_for_scan(SCAN_WAIT);
+            }
+            let files: usize = fresh
+                .iter()
+                .filter_map(|p| p.read().ok()?.as_ref().map(|p| p.live_file_count()))
+                .sum();
+            eprintln!(
+                "[files] indexed {files} files in {} new root(s) in {:.1?}",
+                fresh.len(),
+                started.elapsed()
+            );
+            if let Some(cb) = on_ready {
+                cb();
+            }
+        });
+    }
+
+    /// Stop and drop every picker.
+    pub fn clear(&self) {
+        let roots = std::mem::take(&mut *util::write(&self.roots));
+        for r in &roots {
+            r.shutdown();
+        }
+    }
+
+    /// Re-walk every root in the background. Unwatched roots (e.g. `/`) only
+    /// pick up changes this way, on startup, or on a config change.
+    pub fn rescan(&self) {
+        for r in util::read(&self.roots).iter() {
+            if let Err(e) = r.picker.trigger_full_rescan_async(&SharedFrecency::default()) {
+                eprintln!("[files] rescan of {} failed: {e}", r.dir.display());
+            }
+        }
+    }
+
+    /// Indexed file count across all roots (directories excluded).
+    #[cfg(test)]
+    pub fn file_count(&self) -> usize {
+        util::read(&self.roots)
             .iter()
-            .map(|d| (crate::config::Config::expand_path(&d.path), d.depth))
-            .collect();
+            .filter_map(|r| r.picker.read().ok()?.as_ref().map(|p| p.live_file_count()))
+            .sum()
+    }
 
-        let mut entries = Vec::new();
-        for (dir, depth) in &roots {
-            if !dir.is_dir() {
-                continue;
-            }
-            let walk = walkdir::WalkDir::new(dir)
-                .max_depth(*depth)
-                .follow_links(false)
-                .into_iter()
-                // Prune, don't filter: skipping an ignored directory's whole
-                // subtree is the point - descending into node_modules to throw
-                // the entries away afterwards costs the same walk.
-                .filter_entry(|e| e.depth() == 0 || !is_ignored_name(e.file_name(), &files_cfg.ignore));
-            for entry in walk.filter_map(|e| e.ok()) {
-                if entry.depth() == 0 {
+    /// Block until every root finished its current scan.
+    #[cfg(test)]
+    pub fn wait_for_scan(&self, timeout: Duration) -> bool {
+        util::read(&self.roots).iter().all(|r| r.picker.wait_for_scan(timeout))
+    }
+
+    fn search(&self, query: &str, ignore: &[String]) -> Vec<Hit> {
+        let parser = QueryParser::default();
+        let parsed = parser.parse(query);
+        let opts = FuzzySearchOptions {
+            pagination: PaginationArgs { offset: 0, limit: CANDIDATE_CAP },
+            ..Default::default()
+        };
+
+        let mut hits: Vec<Hit> = vec![];
+        for root in util::read(&self.roots).iter() {
+            let Ok(guard) = root.picker.read() else { continue };
+            let Some(picker) = guard.as_ref() else { continue };
+            let res = picker.fuzzy_search_mixed(&parsed, None, opts);
+            for (item, score) in res.items.into_iter().zip(res.scores) {
+                let (rel, abs, is_dir, size, modified) = match item {
+                    MixedItemRef::File(f) => (
+                        f.relative_path(picker),
+                        f.absolute_path(picker, &root.dir),
+                        false,
+                        Some(f.size),
+                        (f.modified > 0).then_some(f.modified),
+                    ),
+                    MixedItemRef::Dir(d) => (
+                        d.relative_path(picker),
+                        d.absolute_path(picker, &root.dir),
+                        true,
+                        None,
+                        None,
+                    ),
+                };
+                let rel = Path::new(&rel);
+                if root.nested.iter().any(|n| abs.starts_with(n)) || is_ignored(rel, ignore) {
                     continue;
                 }
-                let is_dir = entry.file_type().is_dir();
-                if let Some(fe) = make_entry(entry.path(), is_dir, entry.metadata().ok().as_ref()) {
-                    entries.push(fe);
+                if let Some(hit) = make_hit(&abs, rel, is_dir, size, modified, score.total) {
+                    hits.push(hit);
                 }
             }
         }
-        entries
-    }
 
-    /// Returns entries for `path` and, if it is a directory, all of its contents up to
-    /// the remaining depth budget. Use this instead of `entry_from_path` when handling
-    /// a directory that may have been moved in (e.g. a rename event).
-    pub fn entries_for_path(
-        path: &Path,
-        base: &Path,
-        max_depth: usize,
-        ignore: &[String],
-    ) -> Vec<FileEntry> {
-        let Some(root) = Self::entry_from_path(path, base, max_depth, ignore) else {
-            return vec![];
-        };
-        if !root.is_dir {
-            return vec![root];
-        }
-        let rel_depth = match path.strip_prefix(base) {
-            Ok(rel) => rel.components().count(),
-            Err(_) => return vec![root],
-        };
-        let remaining = max_depth.saturating_sub(rel_depth);
-        let mut entries = vec![root];
-        if remaining > 0 {
-            for wentry in walkdir::WalkDir::new(path)
-                .max_depth(remaining)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|e| e.depth() == 0 || !is_ignored_name(e.file_name(), ignore))
-                .filter_map(|e| e.ok())
-            {
-                if wentry.depth() == 0 {
-                    continue;
-                }
-                if let Some(fe) = Self::entry_from_path(wentry.path(), base, max_depth, ignore) {
-                    entries.push(fe);
-                }
-            }
-        }
-        entries
-    }
-
-    pub fn entry_from_path(
-        path: &Path,
-        base: &Path,
-        max_depth: usize,
-        ignore: &[String],
-    ) -> Option<FileEntry> {
-        let rel = path.strip_prefix(base).ok()?;
-        let depth = rel.components().count();
-        if depth == 0 || depth > max_depth {
-            return None;
-        }
-        // A watcher event can name a path inside an ignored tree, which the
-        // walk would never have produced.
-        if rel.iter().any(|c| is_ignored_name(c, ignore)) {
-            return None;
-        }
-        let meta = std::fs::metadata(path).ok()?;
-        make_entry(path, meta.is_dir(), Some(&meta))
-    }
-
-    pub fn with_entries(entries: Arc<RwLock<Vec<FileEntry>>>, shared: SharedConfig) -> Self {
-        Self { entries, shared }
-    }
-
-    /// Full-walk `files_cfg` and replace `entries` with the result. Shared by
-    /// the startup build and the config-reload full-rewalk path.
-    pub fn populate(entries: &Arc<RwLock<Vec<FileEntry>>>, files_cfg: &FilesConfig) {
-        *util::write(entries) = Self::walk_dirs(files_cfg);
+        hits.sort_unstable_by(|a, b| b.score.cmp(&a.score));
+        hits.truncate(CANDIDATE_CAP);
+        hits
     }
 }
 
-/// Build an entry from a path already known to be in scope. `meta` is passed in
-/// because both callers have it in hand (walkdir caches it), and a missing one
-/// only costs the size/time fields.
-fn make_entry(path: &Path, is_dir: bool, meta: Option<&std::fs::Metadata>) -> Option<FileEntry> {
-    let name = path.file_name()?.to_str()?.to_owned();
-    let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("").to_owned();
-    let stamp = |t: std::io::Result<std::time::SystemTime>| {
-        t.ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
+pub type SharedFileIndex = Arc<FileIndex>;
+
+/// Configured dirs → fff base paths, `~` expanded, missing dirs and duplicates
+/// dropped. `/` fans out into its top-level directories (minus pseudo
+/// filesystems and symlinks such as a merged-usr `/bin`), which also keeps fff
+/// from refusing it as a filesystem root.
+fn resolve_roots(cfg: &FilesConfig) -> Vec<(PathBuf, bool)> {
+    let mut out: Vec<(PathBuf, bool)> = vec![];
+    let mut push = |dir: PathBuf, watch: bool| {
+        if !out.iter().any(|(d, _)| *d == dir) {
+            out.push((dir, watch));
+        }
     };
-    let (file_size, created, modified) = match meta {
-        Some(m) => (
-            (!is_dir).then(|| m.len()),
-            stamp(m.created()),
-            stamp(m.modified()),
-        ),
-        None => (None, None, None),
-    };
-    let path_str = path.to_string_lossy().into_owned();
-    Some(FileEntry {
-        hidden: has_hidden_component(&path_str),
-        previewable: !is_dir && is_previewable_ext(&name),
-        path: path_str,
+    for entry in &cfg.dirs {
+        let dir = crate::config::Config::expand_path(&entry.path);
+        if dir.parent().is_none() {
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let mut children: Vec<PathBuf> = rd
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter(|e| {
+                    e.file_name().to_str().is_some_and(|n| !PSEUDO_ROOT_DIRS.contains(&n))
+                })
+                .map(|e| e.path())
+                .collect();
+            children.sort();
+            for c in children {
+                push(c, entry.watch);
+            }
+        } else if dir.is_dir() {
+            push(dir, entry.watch);
+        }
+    }
+    out
+}
+
+/// True when any component of the root-relative path is a configured ignore
+/// name. fff already prunes gitignored trees and common build/cache dirs during
+/// its walk; this catches the user's extra names.
+fn is_ignored(rel: &Path, ignore: &[String]) -> bool {
+    !ignore.is_empty()
+        && rel.components().any(|c| {
+            matches!(c, Component::Normal(s) if s.to_str().is_some_and(|n| ignore.iter().any(|i| i == n)))
+        })
+}
+
+/// Dot-prefixed component below the root. The root itself never counts: a
+/// configured `~/.config/hypr` is an explicit choice.
+fn has_hidden_component(rel: &Path) -> bool {
+    rel.components()
+        .any(|c| matches!(c, Component::Normal(s) if s.to_string_lossy().starts_with('.')))
+}
+
+fn make_hit(
+    abs: &Path,
+    rel: &Path,
+    is_dir: bool,
+    size: Option<u64>,
+    modified: Option<u64>,
+    score: i32,
+) -> Option<Hit> {
+    let name = abs.file_name()?.to_str()?.to_owned();
+    let parent = abs.parent().and_then(|p| p.to_str()).unwrap_or("").to_owned();
+    Some(Hit {
+        path: abs.to_str()?.to_owned(),
         name,
         parent,
         is_dir,
-        file_size,
-        created,
+        hidden: has_hidden_component(rel),
+        size,
         modified,
-    })
-}
-
-/// Allocation-free stand-in for `ranking::detect_tier`, used only to order the
-/// candidate cut: 3 = whole name, 2 = prefix, 1 = word start, 0 = fuzzy. Case
-/// folding is ASCII-only (`detect_tier` also folds diacritics), which at worst
-/// ranks a diacritic title as fuzzy for the cut - the surviving results still
-/// get their true tier in phase 2.
-fn cheap_tier(name: &str, query: &str) -> u8 {
-    let (n, q) = (name.as_bytes(), query.as_bytes());
-    if q.is_empty() || q.len() > n.len() {
-        return 0;
-    }
-    let matches_at = |i: usize| n[i..i + q.len()].eq_ignore_ascii_case(q);
-    if n.len() == q.len() && matches_at(0) {
-        return 3;
-    }
-    if matches_at(0) {
-        return 2;
-    }
-    // A word start is any position following a non-alphanumeric byte. Bytes are
-    // enough: a UTF-8 continuation byte is never ASCII-alphanumeric, so a
-    // multi-byte char reads as a separator - the same tier the real
-    // `detect_tier` would reach via `char::is_alphanumeric` on punctuation.
-    for i in 1..=(n.len() - q.len()) {
-        if !n[i - 1].is_ascii_alphanumeric() && matches_at(i) {
-            return 1;
-        }
-    }
-    0
-}
-
-/// True when `name` is one of the configured ignore names. Exact, whole-component
-/// match: an ignore entry is a directory name, not a glob or a substring.
-fn is_ignored_name(name: &std::ffi::OsStr, ignore: &[String]) -> bool {
-    name.to_str()
-        .is_some_and(|n| ignore.iter().any(|i| i == n))
-}
-
-fn has_hidden_component(path: &str) -> bool {
-    use std::path::Component;
-    std::path::Path::new(path).components().any(|c| {
-        matches!(c, Component::Normal(s) if s.to_string_lossy().starts_with('.'))
+        score,
     })
 }
 
@@ -245,6 +346,19 @@ fn is_previewable_ext(name: &str) -> bool {
     )
 }
 
+// ── Search provider ───────────────────────────────────────────────────────────
+
+pub struct FileProvider {
+    index: SharedFileIndex,
+    shared: SharedConfig,
+}
+
+impl FileProvider {
+    pub fn new(index: SharedFileIndex, shared: SharedConfig) -> Self {
+        Self { index, shared }
+    }
+}
+
 impl Provider for FileProvider {
     fn id(&self) -> &str {
         "files"
@@ -257,90 +371,56 @@ impl Provider for FileProvider {
         }
 
         let cfg = util::read(&self.shared);
-        let min_quality = cfg.min_quality;
         let show_dotfiles = cfg.show_dotfiles;
         let log_scores = cfg.log_scores;
+        let ignore = cfg.files_ignore.clone();
         drop(cfg);
 
-        let (pattern, mut matcher, mut char_buf) = super::fuzzy_setup(query);
-        let threshold = super::quality_threshold(min_quality, query.chars().count());
-        let entries = util::read(&self.entries);
-
-        // Phase 1: score only, no allocation. A one-character query matches
-        // nearly every entry in the index, so anything built per candidate here
-        // is built tens of thousands of times per keystroke.
-        let mut scored: Vec<(u8, u32, u32)> = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(i, entry)| {
-                if !show_dotfiles && entry.hidden {
-                    return None;
-                }
-                let score =
-                    pattern.score(Utf32Str::new(&entry.name, &mut char_buf), &mut matcher)?;
-                Some((cheap_tier(&entry.name, q), score, i as u32))
-            })
-            .collect();
-
-        // Keep the best CANDIDATE_CAP by (tier, score) - the same order the
-        // registry's band composition leads with, so the cut can't drop a title
-        // that a tier boost would have put on top. Partition around the cut
-        // instead of sorting the whole candidate list.
-        let rank = |c: &(u8, u32, u32)| (c.0, c.1);
-        if scored.len() > CANDIDATE_CAP {
-            scored.select_nth_unstable_by(CANDIDATE_CAP, |a, b| rank(b).cmp(&rank(a)));
-            scored.truncate(CANDIDATE_CAP);
+        let mut hits = self.index.search(q, &ignore);
+        if !show_dotfiles {
+            hits.retain(|h| !h.hidden);
         }
-        scored.sort_unstable_by(|a, b| rank(b).cmp(&rank(a)));
+        let Some(top) = hits.first().map(|h| h.score.max(1)) else {
+            return vec![];
+        };
+        let floor = (top as f32 * RELATIVE_FLOOR) as i32;
 
-        // Adaptive floor: relax the threshold so the top 3 fuzzy scores always
-        // survive. Read off the kept candidates, which are ordered by tier
-        // first, so the third-best score is not simply the third element.
-        let mut top: Vec<u32> = scored.iter().map(|c| c.1).collect();
-        top.sort_unstable_by(|a, b| b.cmp(a));
-        let floor = top.get(2).copied().unwrap_or(0) as f32;
-        let effective = threshold.min(floor);
-
-        // Phase 2: materialize the survivors, capped - the registry re-ranks
-        // with frecency and pins, then shows only `max_results` of them.
-        scored
-            .into_iter()
-            .filter(|(_, score, _)| (*score as f32) >= effective)
-            .map(|(_, score, i)| {
-                let entry = &entries[i as usize];
+        hits.into_iter()
+            .filter(|h| h.score >= floor)
+            .map(|h| {
+                // fff owns relevance; the registry's fuzzy bonus is fed its
+                // score relative to the best hit, on the nucleo scale the
+                // ranking formula expects.
+                let fuzzy = (h.score.max(0) as f32 / top as f32 * super::FUZZY_REFERENCE) as u32;
                 if log_scores {
-                    eprintln!(
-                        "[files] {:?} → {:?}  score={} effective_threshold={:.1}",
-                        query, entry.name, score, effective
-                    );
+                    eprintln!("[files] {query:?} → {:?}  fff={} fuzzy={fuzzy}", h.path, h.score);
                 }
                 let mut intra = 0.0;
                 // Folders sink below files within the band but always render a
                 // listing → no preview penalty for dirs.
-                if entry.is_dir {
+                if h.is_dir {
                     intra += FOLDER_OFFSET;
-                } else if !entry.previewable {
+                } else if !is_previewable_ext(&h.name) {
                     intra -= super::PENALTY_NO_PREVIEW;
                 }
-                if entry.hidden {
+                if h.hidden {
                     intra -= super::PENALTY_HIDDEN;
                 }
                 let mut parts = ranking::ScoreParts::new(
                     ranking::Category::File,
-                    ranking::detect_tier(&entry.name, q),
-                    score,
+                    ranking::detect_tier(&h.name, q),
+                    fuzzy,
                 );
                 parts.intra = intra;
-                let escaped = entry.path.replace('"', "\\\"");
+                let escaped = h.path.replace('"', "\\\"");
                 SearchResult {
-                    id: format!("file:{}", entry.path),
-                    title: entry.name.clone(),
-                    subtitle: Some(entry.parent.clone()),
-                    kind: if entry.is_dir { "folder" } else { "file" }.to_string(),
+                    id: format!("file:{}", h.path),
+                    title: h.name,
+                    subtitle: Some(h.parent),
+                    kind: if h.is_dir { "folder" } else { "file" }.to_string(),
                     exec: Some(format!("xdg-open \"{}\"", escaped)),
-                    file_size: entry.file_size,
-                    created: entry.created,
-                    modified: entry.modified,
+                    file_size: h.size,
+                    modified: h.modified,
                     parts: Some(parts),
                     ..Default::default()
                 }
@@ -361,118 +441,124 @@ mod tests {
         dir
     }
 
-    fn cfg_for(root: &Path, ignore: &[&str]) -> FilesConfig {
+    fn cfg_for(roots: &[&Path], ignore: &[&str]) -> FilesConfig {
         FilesConfig {
-            dirs: vec![DirEntry { path: root.to_string_lossy().into_owned(), depth: 4 }],
+            dirs: roots
+                .iter()
+                .map(|r| DirEntry { path: r.to_string_lossy().into_owned(), watch: false })
+                .collect(),
             show_dotfiles: true,
             colored_icons: true,
             ignore: ignore.iter().map(|s| s.to_string()).collect(),
         }
     }
 
-    /// An ignored directory contributes nothing - neither itself nor its
-    /// subtree, however deep.
-    #[test]
-    fn walk_prunes_ignored_subtrees() {
-        let root = tmpdir("ignore-prune");
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("node_modules/pkg/deep")).unwrap();
-        std::fs::write(root.join("src/notes.md"), "x").unwrap();
-        std::fs::write(root.join("node_modules/pkg/deep/notes.md"), "x").unwrap();
-
-        let entries = FileProvider::walk_dirs(&cfg_for(&root, &["node_modules"]));
-        let names: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
-        assert!(names.iter().any(|p| p.ends_with("src/notes.md")));
-        assert!(
-            !names.iter().any(|p| p.contains("node_modules")),
-            "ignored subtree leaked: {names:?}"
-        );
-    }
-
-    /// The watcher resolves paths directly, so the ignore list has to hold on
-    /// that path too - otherwise a write inside an ignored tree re-adds it.
-    #[test]
-    fn watcher_path_inside_ignored_tree_is_rejected() {
-        let root = tmpdir("ignore-watch");
-        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
-        std::fs::write(root.join(".git/objects/blob"), "x").unwrap();
-        let ignore = vec![".git".to_string()];
-
-        assert!(
-            FileProvider::entry_from_path(&root.join(".git/objects/blob"), &root, 4, &ignore)
-                .is_none()
-        );
-        assert!(FileProvider::entries_for_path(&root.join(".git"), &root, 4, &ignore).is_empty());
-    }
-
-    /// Path-static flags are decided at walk time; search reads them instead of
-    /// re-deriving them per entry per keystroke.
-    #[test]
-    fn walk_records_hidden_and_previewable() {
-        let root = tmpdir("flags");
-        std::fs::create_dir_all(root.join(".hidden")).unwrap();
-        std::fs::write(root.join(".hidden/notes.md"), "x").unwrap();
-        std::fs::write(root.join("archive.zip"), "x").unwrap();
-
-        let entries = FileProvider::walk_dirs(&cfg_for(&root, &[]));
-        let by_name = |n: &str| entries.iter().find(|e| e.name == n).unwrap();
-        assert!(by_name("notes.md").hidden);
-        assert!(by_name("notes.md").previewable);
-        assert!(!by_name("archive.zip").hidden);
-        assert!(!by_name("archive.zip").previewable);
-        assert!(!by_name(".hidden").previewable, "a directory is never previewable");
-    }
-
-    /// A one-character query matches nearly every indexed entry. The provider
-    /// must hand the registry a bounded list and still lead with the best match.
-    #[test]
-    fn search_caps_candidates_and_keeps_the_best() {
-        let root = tmpdir("cap");
-        for i in 0..(CANDIDATE_CAP * 3) {
-            std::fs::write(root.join(format!("a-filler-{i}.txt")), "x").unwrap();
-        }
-        // Whole-name match, written last so file order can't carry the test.
-        std::fs::write(root.join("a"), "x").unwrap();
-
-        let files_cfg = cfg_for(&root, &[]);
+    fn provider(files_cfg: &FilesConfig) -> (FileProvider, SharedFileIndex) {
         let mut cfg = Config::default();
         cfg.files = files_cfg.clone();
         let shared: SharedConfig = Arc::new(RwLock::new(SharedSearchConfig::from_config(&cfg)));
-        let entries = Arc::new(RwLock::new(FileProvider::walk_dirs(&files_cfg)));
-        let provider = FileProvider::with_entries(entries, shared);
+        let index: SharedFileIndex = Arc::default();
+        index.configure(files_cfg, None);
+        assert!(index.wait_for_scan(Duration::from_secs(30)));
+        (FileProvider::new(Arc::clone(&index), shared), index)
+    }
 
-        let results = provider.search("a");
-        assert!(results.len() <= CANDIDATE_CAP, "unbounded result list: {}", results.len());
-        assert_eq!(
-            results[0].title, "a",
-            "the candidate cut must not drop a whole-name match"
-        );
+    fn titles(results: &[SearchResult]) -> Vec<&str> {
+        results.iter().map(|r| r.title.as_str()).collect()
     }
 
     #[test]
-    fn cheap_tier_matches_the_real_tier_for_ascii() {
-        use ranking::MatchTier;
-        let rank = |t: MatchTier| match t {
-            MatchTier::Exact => 3,
-            MatchTier::Prefix => 2,
-            MatchTier::WordStart => 1,
-            MatchTier::Fuzzy => 0,
+    fn finds_files_and_folders_with_metadata() {
+        let root = tmpdir("basic");
+        std::fs::create_dir_all(root.join("projects/quarterly")).unwrap();
+        std::fs::write(root.join("projects/quarterly/report.pdf"), "x").unwrap();
+        std::fs::write(root.join("café.md"), "abc").unwrap();
+
+        let (p, index) = provider(&cfg_for(&[&root], &[]));
+        assert_eq!(index.file_count(), 2);
+
+        let r = p.search("report");
+        assert_eq!(r[0].title, "report.pdf");
+        assert_eq!(r[0].kind, "file");
+        assert_eq!(
+            r[0].subtitle.as_deref(),
+            Some(root.join("projects/quarterly").to_str().unwrap())
+        );
+        assert_eq!(r[0].file_size, Some(1));
+
+        let r = p.search("quarterly");
+        assert!(r.iter().any(|r| r.title == "quarterly" && r.kind == "folder"), "{:?}", titles(&r));
+
+        let r = p.search("café");
+        assert_eq!(r[0].file_size, Some(3));
+    }
+
+    /// Typo resistance is the point of fff: a transposition still finds the file.
+    #[test]
+    fn tolerates_typos() {
+        let root = tmpdir("typo");
+        std::fs::write(root.join("invoice.pdf"), "x").unwrap();
+        std::fs::write(root.join("unrelated.txt"), "x").unwrap();
+        let (p, _) = provider(&cfg_for(&[&root], &[]));
+        assert_eq!(p.search("invocie")[0].title, "invoice.pdf");
+    }
+
+    #[test]
+    fn ignore_names_are_filtered() {
+        let root = tmpdir("ignore");
+        std::fs::create_dir_all(root.join("build-out/deep")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("build-out/deep/notes.md"), "x").unwrap();
+        std::fs::write(root.join("src/notes.md"), "x").unwrap();
+
+        let (p, _) = provider(&cfg_for(&[&root], &["build-out"]));
+        let r = p.search("notes");
+        assert!(r.iter().all(|r| !r.id.contains("build-out")), "ignored tree leaked: {:?}", r);
+        assert!(r.iter().any(|r| r.id.ends_with("src/notes.md")));
+    }
+
+    /// Overlapping roots never list a path twice: the most specific root owns it.
+    #[test]
+    fn nested_roots_do_not_duplicate() {
+        let root = tmpdir("nested");
+        std::fs::create_dir_all(root.join("inner")).unwrap();
+        std::fs::write(root.join("inner/unique-name.txt"), "x").unwrap();
+
+        let inner = root.join("inner");
+        let (p, _) = provider(&cfg_for(&[&root, &inner], &[]));
+        let r = p.search("unique-name");
+        assert_eq!(r.iter().filter(|r| r.title == "unique-name.txt").count(), 1);
+    }
+
+    /// Reconfiguring keeps unchanged roots and drops removed ones.
+    #[test]
+    fn configure_reconciles_roots() {
+        let a = tmpdir("reconcile-a");
+        let b = tmpdir("reconcile-b");
+        std::fs::write(a.join("alpha.txt"), "x").unwrap();
+        std::fs::write(b.join("bravo.txt"), "x").unwrap();
+
+        let (p, index) = provider(&cfg_for(&[&a], &[]));
+        assert!(p.search("bravo").iter().all(|r| r.title != "bravo.txt"));
+
+        index.configure(&cfg_for(&[&b], &[]), None);
+        assert!(index.wait_for_scan(Duration::from_secs(30)));
+        assert!(p.search("bravo").iter().any(|r| r.title == "bravo.txt"));
+        assert!(p.search("alpha").iter().all(|r| r.title != "alpha.txt"));
+
+        index.clear();
+        assert!(p.search("bravo").is_empty());
+    }
+
+    #[test]
+    fn filesystem_root_fans_out_without_pseudo_filesystems() {
+        let cfg = FilesConfig {
+            dirs: vec![DirEntry { path: "/".into(), watch: false }],
+            ..FilesConfig::default()
         };
-        for (name, query) in [
-            ("notes", "notes"),
-            ("Notes", "notes"),
-            ("notes.md", "notes"),
-            ("my-notes.md", "notes"),
-            ("my notes.md", "notes"),
-            ("cannotes.md", "notes"),
-            ("nt", "notes"),
-            ("notes", ""),
-        ] {
-            assert_eq!(
-                cheap_tier(name, query),
-                rank(ranking::detect_tier(name, query)),
-                "tier mismatch for {name:?} / {query:?}"
-            );
-        }
+        let roots = resolve_roots(&cfg);
+        assert!(!roots.is_empty());
+        assert!(roots.iter().all(|(d, _)| d.parent() == Some(Path::new("/"))));
+        assert!(!roots.iter().any(|(d, _)| d == Path::new("/proc") || d == Path::new("/sys")));
     }
 }

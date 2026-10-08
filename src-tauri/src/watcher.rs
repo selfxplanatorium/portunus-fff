@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use notify_debouncer_full::{new_debouncer, notify::RecursiveMode, notify::Watcher, DebouncedEvent};
 
-use crate::{config, content_index, provider_reload, providers, ContentWatcherTx, FileWatcherTx, Registry, SharedFileEntries};
+use crate::{config, content_index, provider_reload, ContentWatcherTx, Registry, SharedFileIndex};
 
 /// Watches every directory under `root` whose own depth below `root` is `<= max_below`,
 /// NON-recursively and WITHOUT following symlinks. Watching a dir surfaces events for its
@@ -145,8 +145,7 @@ pub fn start_config_watcher(
     content_watcher_tx: ContentWatcherTx,
     notify_cb: Arc<dyn Fn() + Send + Sync>,
     keybinds_cb: Arc<dyn Fn(&config::KeybindsConfig) + Send + Sync>,
-    file_entries: SharedFileEntries,
-    file_watcher_tx: FileWatcherTx,
+    file_index: SharedFileIndex,
     ext_kv: Arc<crate::extensions::kv::ExtensionKv>,
     frecency: crate::FrecencyState,
 ) {
@@ -230,8 +229,7 @@ pub fn start_config_watcher(
                     &content_watcher_tx,
                     &notify_cb,
                     &keybinds_cb,
-                    &file_entries,
-                    &file_watcher_tx,
+                    &file_index,
                     &ext_kv,
                     &frecency,
                 );
@@ -288,87 +286,6 @@ pub fn start_content_watcher(
                 }
             } else if log {
                 eprintln!("[content-watcher] event received but content index is None");
-            }
-        },
-    )
-}
-
-// ── File provider filesystem watcher ─────────────────────────────────────────
-
-fn find_dir_for<'a>(
-    path: &std::path::Path,
-    dirs: &'a [(PathBuf, usize)],
-) -> Option<(&'a std::path::Path, usize)> {
-    dirs.iter()
-        .find(|(base, _)| path.starts_with(base))
-        .map(|(base, depth)| (base.as_path(), *depth))
-}
-
-pub fn start_file_watcher(
-    entries: SharedFileEntries,
-    initial_cfg: config::FilesConfig,
-    notify_cb: Arc<dyn Fn() + Send + Sync>,
-) -> std::sync::mpsc::Sender<config::FilesConfig> {
-    run_dir_watcher(
-        initial_cfg,
-        |cfg: &config::FilesConfig| {
-            cfg.dirs.iter().map(|d| (config::Config::expand_path(&d.path), d.depth)).collect()
-        },
-        move |events, current_cfg| {
-            let dirs_with_depth: Vec<(PathBuf, usize)> = current_cfg
-                .dirs
-                .iter()
-                .map(|d| (config::Config::expand_path(&d.path), d.depth))
-                .collect();
-
-            // Kind-agnostic, mirroring the content watcher: the debouncer coalesces
-            // create+write and does not reliably surface new files as EventKind::Create,
-            // so classifying by kind drops events. Instead, re-resolve each touched path:
-            // exists → upsert (drop stale entry + subtree, re-add fresh), gone → remove.
-            let mut touched: Vec<PathBuf> = vec![];
-            for ev in events {
-                for p in &ev.event.paths {
-                    if !touched.contains(p) {
-                        touched.push(p.clone());
-                    }
-                }
-            }
-
-            let mut to_add: Vec<providers::files::FileEntry> = vec![];
-            let mut to_remove: Vec<String> = vec![];
-
-            for path in &touched {
-                if path.exists() {
-                    if let Some((base, depth)) = find_dir_for(path, &dirs_with_depth) {
-                        // ponytail: re-walks a dir's subtree on any event for that dir;
-                        // debounced + depth-bounded (default 2). Narrow by kind if it bites.
-                        to_remove.push(path.to_string_lossy().into_owned());
-                        to_add.extend(providers::files::FileProvider::entries_for_path(
-                            path,
-                            base,
-                            depth,
-                            &current_cfg.ignore,
-                        ));
-                    }
-                } else {
-                    to_remove.push(path.to_string_lossy().into_owned());
-                }
-            }
-
-            // A batch touching both a dir and a descendant re-walks the subtree and
-            // also upserts the descendant, yielding the same path twice. Dedup.
-            to_add.sort_by(|a, b| a.path.cmp(&b.path));
-            to_add.dedup_by(|a, b| a.path == b.path);
-
-            if !to_add.is_empty() || !to_remove.is_empty() {
-                let mut guard = entries.write().unwrap();
-                for p in &to_remove {
-                    let prefix = format!("{p}/");
-                    guard.retain(|e| e.path != *p && !e.path.starts_with(&prefix));
-                }
-                guard.extend(to_add);
-                drop(guard);
-                notify_cb();
             }
         },
     )

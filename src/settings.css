@@ -605,6 +605,11 @@ a:focus-visible,
 
 .settings-dir-path:focus { border-color: var(--accent); }
 
+.settings-dir-watch {
+  display: flex;
+  justify-content: center;
+}
+
 .settings-dir-depth {
   display: flex;
   align-items: center;

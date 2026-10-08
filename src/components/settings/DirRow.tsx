@@ -1,4 +1,5 @@
 import { KeyboardEvent, RefObject } from "react";
+import Toggle from "./Toggle";
 
 const TrashIcon = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -18,30 +19,34 @@ const XIcon = () => (
   </svg>
 );
 
-interface BaseProps {
+/** The middle column: a crawl-depth stepper (content dirs) or a live-watch
+ *  toggle (file dirs, which fff crawls to full depth). */
+type DirControl =
+  | { depth: number; onDepthChange: (depth: number) => void; watch?: never; onWatchChange?: never }
+  | { watch: boolean; onWatchChange: (watch: boolean) => void; depth?: never; onDepthChange?: never };
+
+type BaseProps = DirControl & {
   path: string;
-  depth: number;
   onPathChange: (path: string) => void;
-  onDepthChange: (depth: number) => void;
   onRemove: () => void;
-}
+};
 
-interface ExistingRowProps extends BaseProps {
+type ExistingRowProps = BaseProps & {
   draft?: false;
-}
+};
 
-interface DraftRowProps extends BaseProps {
+type DraftRowProps = BaseProps & {
   draft: true;
   inputRef: RefObject<HTMLInputElement | null>;
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void;
   onCommit: () => void;
   onDiscard: () => void;
-}
+};
 
 type Props = ExistingRowProps | DraftRowProps;
 
 export default function DirRow(props: Props) {
-  const { path, depth, onPathChange, onDepthChange, onRemove } = props;
+  const { path, onPathChange, onRemove } = props;
   const isDraft = props.draft === true;
 
   return (
@@ -54,11 +59,17 @@ export default function DirRow(props: Props) {
         onChange={e => onPathChange(e.target.value)}
         onKeyDown={isDraft ? (props as DraftRowProps).onKeyDown : undefined}
       />
-      <div className="settings-dir-depth">
-        <button className="settings-dir-depth-btn" onClick={() => onDepthChange(Math.max(1, depth - 1))}>−</button>
-        <span className="settings-dir-depth-val" title="Search depth">{depth}</span>
-        <button className="settings-dir-depth-btn" onClick={() => onDepthChange(Math.min(10, depth + 1))}>+</button>
-      </div>
+      {props.onDepthChange ? (
+        <div className="settings-dir-depth">
+          <button className="settings-dir-depth-btn" onClick={() => props.onDepthChange(Math.max(1, props.depth - 1))}>−</button>
+          <span className="settings-dir-depth-val" title="Search depth">{props.depth}</span>
+          <button className="settings-dir-depth-btn" onClick={() => props.onDepthChange(Math.min(10, props.depth + 1))}>+</button>
+        </div>
+      ) : (
+        <div className="settings-dir-watch" title="Watch for changes (one inotify watch per directory)">
+          <Toggle label="Watch for changes" checked={props.watch} onChange={props.onWatchChange} />
+        </div>
+      )}
       {isDraft ? (
         <>
           <button

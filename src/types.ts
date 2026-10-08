@@ -1,6 +1,7 @@
 export interface DirEntry {
   path: string;
-  depth: number;
+  /** Keep the index live via inotify (default true). */
+  watch?: boolean;
 }
 
 export interface ContentDirEntry {
@@ -56,7 +57,7 @@ export interface Config {
     dirs: DirEntry[];
     show_dotfiles: boolean;
     colored_icons: boolean;
-    /** Directory names pruned from the walk (exact whole-component match). */
+    /** Directory names hidden from results (exact whole-component match). */
     ignore: string[];
   };
   search: {

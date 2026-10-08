@@ -35,9 +35,7 @@ pub(crate) type Registry = Arc<RwLock<providers::PluginRegistry>>;
 pub(crate) type FrecencyState = Option<Arc<frecency::FrecencyStore>>;
 pub(crate) type ContentWatcherTx =
     Arc<Mutex<Option<std::sync::mpsc::Sender<config::ContentConfig>>>>;
-pub(crate) type FileWatcherTx =
-    Arc<Mutex<Option<std::sync::mpsc::Sender<config::FilesConfig>>>>;
-pub(crate) type SharedFileEntries = Arc<RwLock<Vec<providers::files::FileEntry>>>;
+pub(crate) use providers::files::SharedFileIndex;
 pub(crate) type ConfigState = Arc<Mutex<config::Config>>;
 pub(crate) type ContentState = Arc<Mutex<Option<Arc<content_index::ContentIndex>>>>;
 pub(crate) type ClipboardOcrState = Option<Arc<clipboard_ocr::ClipboardOcrStore>>;
@@ -812,10 +810,10 @@ pub fn run() {
 
     // Populated once the content watcher thread starts; None until then.
     let content_watcher_tx: ContentWatcherTx = Arc::new(Mutex::new(None));
-    // Populated once the file watcher thread starts; None until then.
-    let file_watcher_tx: FileWatcherTx = Arc::new(Mutex::new(None));
-    // Shared between FileProvider and the file watcher; populated in the startup thread.
-    let file_entries: SharedFileEntries = Arc::new(RwLock::new(vec![]));
+    // fff pickers behind the file provider. Each keeps itself current with its
+    // own watcher; roots are spawned in the startup thread and reconciled on
+    // config reload.
+    let file_index: SharedFileIndex = Arc::default();
 
     // Open content index early (fast - just opens/creates the SQLite file).
     // Wrapped in Arc<Mutex<Option<...>>> so rebuild_providers can open/replace it at runtime.
@@ -953,8 +951,11 @@ pub fn run() {
             let reindex_cb = Arc::clone(&progress_cb);
             let reindex_notify = Arc::clone(&notify_cb);
             let reindex_watcher_tx = Arc::clone(&content_watcher_tx);
-            // --reindex is a poweruser hard rebuild: always a full clear.
+            let reindex_files = Arc::clone(&file_index);
+            // --reindex is a poweruser hard rebuild: always a full clear. It also
+            // re-walks the file roots, the only refresh an unwatched root gets.
             let reindex_fn: Option<Arc<dyn Fn() + Send + Sync>> = Some(Arc::new(move || {
+                reindex_files.rescan();
                 run_full_reindex(&reindex_ci, &reindex_reg, &reindex_cb, &reindex_notify, &reindex_watcher_tx, true);
             }));
 
@@ -982,8 +983,7 @@ pub fn run() {
             let reload_cb = Arc::clone(&progress_cb);
             let reload_watcher_tx = Arc::clone(&content_watcher_tx);
             let reload_notify = Arc::clone(&notify_cb);
-            let reload_file_entries = Arc::clone(&file_entries);
-            let reload_file_watcher_tx = Arc::clone(&file_watcher_tx);
+            let reload_file_index = Arc::clone(&file_index);
             let reload_ext_kv = Arc::clone(&ext_kv);
             let reload_frecency = frecency_state.clone();
             let reload_keybinds = Arc::clone(&keybinds_cb);
@@ -1003,8 +1003,7 @@ pub fn run() {
                         &reload_watcher_tx,
                         &reload_notify,
                         &reload_keybinds,
-                        &reload_file_entries,
-                        &reload_file_watcher_tx,
+                        &reload_file_index,
                         &reload_ext_kv,
                         &reload_frecency,
                     );
@@ -1071,18 +1070,10 @@ pub fn run() {
                 reload_one_extension_fn,
             );
 
-            // Start watchers before start_config_watcher so that file_watcher_tx /
-            // content_watcher_tx are populated before any config-change event can fire.
+            // Start the content watcher before start_config_watcher so that
+            // content_watcher_tx is populated before any config-change event can fire.
             // (Previously both were started inside the background startup thread, which
             // created a race where a config change during startup found tx = None.)
-            if providers_cfg.files {
-                let tx = watcher::start_file_watcher(
-                    Arc::clone(&file_entries),
-                    files_cfg.clone(),
-                    Arc::clone(&notify_cb),
-                );
-                *file_watcher_tx.lock().unwrap() = Some(tx);
-            }
             // Always start the content watcher, even if content is currently disabled,
             // so that re-enabling later will immediately receive filesystem events.
             {
@@ -1105,8 +1096,7 @@ pub fn run() {
                 Arc::clone(&content_watcher_tx),
                 Arc::clone(&notify_cb),
                 Arc::clone(&keybinds_cb),
-                Arc::clone(&file_entries),
-                Arc::clone(&file_watcher_tx),
+                Arc::clone(&file_index),
                 Arc::clone(&ext_kv),
                 frecency_state.clone(),
             );
@@ -1163,7 +1153,7 @@ pub fn run() {
             let shared_bg = Arc::clone(&shared_config);
             let startup_ci = Arc::clone(&content_state);
             let startup_cb = Arc::clone(&progress_cb);
-            let startup_file_entries = Arc::clone(&file_entries);
+            let startup_file_index = Arc::clone(&file_index);
             let startup_ext_kv = Arc::clone(&ext_kv);
             let startup_frecency = frecency_state.clone();
             let startup_notify = Arc::clone(&notify_cb);
@@ -1187,9 +1177,11 @@ pub fn run() {
                     }
                 }
                 if providers_cfg.files {
-                    providers::files::FileProvider::populate(&startup_file_entries, &files_cfg);
-                    let file_provider = providers::files::FileProvider::with_entries(
-                        Arc::clone(&startup_file_entries),
+                    // Returns immediately: fff walks each root on its own threads,
+                    // and results fill in as scans land.
+                    startup_file_index.configure(&files_cfg, Some(Arc::clone(&startup_notify)));
+                    let file_provider = providers::files::FileProvider::new(
+                        Arc::clone(&startup_file_index),
                         Arc::clone(&shared_bg),
                     );
                     bg_registry.write().unwrap().register(file_provider);
