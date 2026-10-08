@@ -436,7 +436,7 @@ const STYLES = `
   white-space: nowrap;
 }
 .market-version {
-  font: 400 11px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg-dim);
   white-space: nowrap;
 }
@@ -550,7 +550,7 @@ const STYLES = `
 }
 .market-danger-text strong { opacity: 1; font-weight: 600; }
 .market-danger-cmds {
-  font: 400 11px/1.4 "JetBrains Mono","Fira Code",monospace;
+  font: 400 11px/1.4 var(--font-mono);
 }
 
 .market-keywords {
@@ -559,7 +559,7 @@ const STYLES = `
   gap: 5px;
 }
 .market-keywords code {
-  font: 400 10.5px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 400 10.5px/1 var(--font-mono);
   padding: 3px 6px;
   border-radius: 5px;
   background: var(--bg-input);

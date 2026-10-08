@@ -128,6 +128,25 @@ fn list_icon_themes() -> Vec<String> {
     providers::icon_theme::installed_themes()
 }
 
+/// Installed font families (fontconfig), for the Appearance font pickers.
+/// `fc-list` ships with fontconfig, which WebKitGTK already depends on.
+#[tauri::command]
+fn list_font_families() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("fc-list").args([":", "family"]).output() else {
+        return vec![];
+    };
+    let mut families: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        // A font can list localized aliases ("Noto Sans CJK JP,Noto Sans CJK JP Regular").
+        .filter_map(|l| l.split(',').next())
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty() && !f.starts_with('.'))
+        .collect();
+    families.sort_by_key(|f| f.to_lowercase());
+    families.dedup();
+    families
+}
+
 /// Records frecency for an invoked command entry so frequently-used commands
 /// rank higher in root search. Fired by the frontend on enter/run.
 #[tauri::command]
@@ -792,6 +811,7 @@ pub fn run() {
     let marketplace_cfg = cfg.marketplace.clone();
     let max_results = cfg.general.max_results;
     let layer_shell_enabled = cfg.general.layer_shell;
+    let blur_enabled = cfg.appearance.blur;
     let content_cfg = cfg.content.clone();
 
     // last_cfg is used by the config watcher and reload_fn as the diff baseline.
@@ -905,6 +925,9 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 if layer_shell_enabled {
                     layer_shell::apply(&window);
+                }
+                if blur_enabled {
+                    std::thread::spawn(|| layer_shell::apply_compositor_blur(true));
                 }
                 let _ = window.hide();
             }
@@ -1253,6 +1276,7 @@ pub fn run() {
             list_pins,
             list_commands,
             list_icon_themes,
+            list_font_families,
             command_used,
             content_match_section,
             content_match_keys,

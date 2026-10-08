@@ -586,6 +586,16 @@ pub struct AppearanceConfig {
     /// dominant color sampled from its own icon/album art.
     #[serde(deserialize_with = "de_accent_bleed")]
     pub accent_bleed: AccentBleed,
+    /// Launcher UI font family; empty = the built-in system stack.
+    pub font_family: String,
+    /// Monospace font for code, paths and key hints; empty = built-in stack.
+    pub mono_font_family: String,
+    /// Opacity of the launcher's background surfaces (0.3 .. 1.0). Text,
+    /// icons and selection stay opaque.
+    pub opacity: f32,
+    /// Ask the compositor to blur behind translucent surfaces (see
+    /// `layer_shell::apply_compositor_blur`).
+    pub blur: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -598,6 +608,10 @@ impl Default for AppearanceConfig {
             slide_selection: true,
             grain: 0.07,
             accent_bleed: AccentBleed::Subtle,
+            font_family: String::new(),
+            mono_font_family: String::new(),
+            opacity: 1.0,
+            blur: false,
         }
     }
 }

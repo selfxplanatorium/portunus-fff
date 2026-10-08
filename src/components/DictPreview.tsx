@@ -63,7 +63,7 @@ const STYLES = `
 }
 
 .dict-count {
-  font: 400 10px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 400 10px/1 var(--font-mono);
   color: var(--fg-dim);
   white-space: nowrap;
 }
@@ -99,7 +99,7 @@ const STYLES = `
 }
 
 .dict-num {
-  font: 600 10px/1.7 "JetBrains Mono","Fira Code",monospace;
+  font: 600 10px/1.7 var(--font-mono);
   color: var(--fg-dim);
   min-width: 12px;
   flex-shrink: 0;
@@ -112,7 +112,7 @@ const STYLES = `
   display: inline-block;
   padding: 1px 5px 2px;
   border-radius: 3px;
-  font: 600 8px/1.5 "JetBrains Mono","Fira Code",monospace;
+  font: 600 8px/1.5 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-right: 5px;
@@ -155,7 +155,7 @@ const STYLES = `
 }
 
 .dict-syn {
-  font: 400 10.5px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 400 10.5px/1 var(--font-mono);
   color: var(--fg-dim);
   background: var(--bg-footer);
   border: 1px solid var(--line-soft);
@@ -192,7 +192,7 @@ const STYLES = `
   justify-content: center;
   gap: 7px;
   color: var(--fg-dim);
-  font: 400 12px/1.5 "JetBrains Mono","Fira Code",monospace;
+  font: 400 12px/1.5 var(--font-mono);
 }
 .dict-error-glyph {
   display: flex;
@@ -235,7 +235,7 @@ const STYLES = `
   line-height: 1.7;
 }
 .dict-hint-token {
-  font: 500 11.5px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 500 11.5px/1 var(--font-mono);
   color: var(--accent);
   background: var(--accent-soft);
   padding: 2px 5px;
@@ -251,11 +251,11 @@ const STYLES = `
   border-left: 2px solid var(--accent);
 }
 .dict-hint-ex-cmd {
-  font: 600 13px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 600 13px/1 var(--font-mono);
   color: var(--accent);
 }
 .dict-hint-ex-word {
-  font: 400 13px/1 "JetBrains Mono","Fira Code",monospace;
+  font: 400 13px/1 var(--font-mono);
   color: var(--fg-mute);
 }
 `;

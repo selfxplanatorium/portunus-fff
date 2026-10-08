@@ -149,7 +149,7 @@
 
 .onb-inline,
 .onb-prov-ex {
-  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 11px/1 var(--font-mono);
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 4px;
@@ -222,7 +222,7 @@
   justify-content: center;
 }
 .onb-kbd-row kbd {
-  font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 10px/1 var(--font-mono);
   color: var(--kbd-fg);
   background: var(--kbd-bg);
   border: 1px solid var(--border);
@@ -232,7 +232,7 @@
 }
 .onb-version-inline {
   margin-left: 6px;
-  font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 10px/1 var(--font-mono);
   color: var(--fg-dim);
   letter-spacing: 0.04em;
 }
@@ -291,7 +291,7 @@
 /* ── chips ───────────────────────────────────────────────────────────────── */
 
 .onb-chip {
-  font: 600 9.5px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 9.5px/1 var(--font-mono);
   text-transform: lowercase;
   letter-spacing: 0.02em;
   padding: 3px 6px;
@@ -419,7 +419,7 @@
   min-width: 0;
   margin: 0;
   padding: 9px 11px;
-  font: 500 11px/1.6 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 11px/1.6 var(--font-mono);
   color: var(--fg);
   /* wrap the whole command so nothing is hidden behind the copy button and no
      horizontal scrollbar is needed; break long unbreakable tokens (paths). */

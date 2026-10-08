@@ -47,3 +47,47 @@ pub fn apply(window: &tauri::WebviewWindow) {
 
 #[cfg(not(target_os = "linux"))]
 pub fn apply(_window: &tauri::WebviewWindow) {}
+
+/// Ask the compositor to blur what is behind the launcher's translucent
+/// surfaces (`[appearance] blur`). A webview cannot blur the desktop itself -
+/// that is compositor work - so this only acts where the compositor can be told
+/// at runtime: Hyprland, through `hyprctl keyword` layer rules on the
+/// `portunus` layer-shell namespace (layer_shell must be on). Elsewhere the
+/// Appearance settings show the rule to add by hand.
+///
+/// `ignore_alpha 0` keeps the fully transparent margin around the rounded card
+/// from being blurred as a rectangle. Hyprland 0.53 rewrote the rule syntax, so
+/// the newer form is tried first and the legacy form is the fallback; each is
+/// accepted only if hyprctl answers `ok`.
+pub fn apply_compositor_blur(enabled: bool) {
+    if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none() {
+        return;
+    }
+    let state = if enabled { "on" } else { "off" };
+    let modern = [
+        format!("blur {state},match:namespace ^portunus$"),
+        "ignore_alpha 0,match:namespace ^portunus$".to_string(),
+    ];
+    let legacy: &[String] = if enabled {
+        &["blur,^portunus$".to_string(), "ignorealpha 0,^portunus$".to_string()]
+    } else {
+        // Pre-0.53 rules cannot be withdrawn at runtime.
+        &[]
+    };
+    for rules in [&modern[..], legacy] {
+        if !rules.is_empty() && rules.iter().all(|r| hyprctl_layerrule(r)) {
+            return;
+        }
+    }
+    eprintln!(
+        "[portunus] blur: hyprctl did not accept the layer rule{}",
+        if enabled { "" } else { "; reload Hyprland to drop the old one" }
+    );
+}
+
+fn hyprctl_layerrule(rule: &str) -> bool {
+    std::process::Command::new("hyprctl")
+        .args(["keyword", "layerrule", rule])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "ok")
+}

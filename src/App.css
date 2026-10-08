@@ -82,7 +82,12 @@ html, body, #root {
   --radius:     14px;
   --radius-sm:  8px;
 
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* [appearance] font_family / mono_font_family prepend the user's choice
+     (theme.ts); these stacks are the fallbacks. */
+  --font-ui:    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono:  "JetBrains Mono", "Fira Code", monospace;
+
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -282,7 +287,7 @@ html, body, #root {
   gap: 9px;
   padding: 6px 12px;
   border-radius: 999px;
-  font: 600 10.5px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 10.5px/1 var(--font-mono);
   color: var(--fg);
   background: color-mix(in srgb, var(--bg-deep) 78%, transparent);
   border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent);
@@ -379,7 +384,7 @@ html, body, #root {
 }
 
 .search-hint-chip {
-  font: 500 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 12px/1 var(--font-mono);
   color: var(--accent);
   background: var(--accent-soft);
   padding: 3px 8px;
@@ -418,7 +423,7 @@ html, body, #root {
 
 .calc-inline {
   flex-shrink: 0;
-  font: 500 15px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 15px/1 var(--font-mono);
   color: var(--accent);
   letter-spacing: -0.01em;
   opacity: 0.85;
@@ -517,27 +522,20 @@ html, body, #root {
      than the accent-tinted app rows. */
   --sel-bg: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
   background: var(--sel-bg);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 /* ---------- accent bleed (per-item sampled color) ----------
    Everything below is gated on the data-accent-bleed attribute so "off" (and
    unset) stays byte-identical to the theme accent. --item-accent /
    --item-on-accent are published on :root by App.tsx (theme accent when off or
-   when a result has no sampled color). Background stays neutral - only the rail,
+   when a result has no sampled color). Background stays neutral - only the
    icon, button, and preview wash pick up the item color.
 
-   Row-targeted rails sit ABOVE the slide-selection reset below, so under sliding
-   selection the row shadow is still cleared and .selection-bg paints the rail. */
-:root[data-accent-bleed="subtle"] .result-row.selected,
+   Row-targeted glow sits ABOVE the slide-selection reset below, so under sliding
+   selection the row shadow is still cleared and .selection-bg paints the glow. */
+/* Bold: a soft, static outer glow halo (no animation). */
 :root[data-accent-bleed="bold"] .result-row.selected {
-  box-shadow: inset 2px 0 0 var(--item-accent);
-}
-/* Bold: fatter rail + a soft, static outer glow halo (no animation). */
-:root[data-accent-bleed="bold"] .result-row.selected {
-  box-shadow:
-    inset 3px 0 0 var(--item-accent),
-    0 0 18px -3px color-mix(in srgb, var(--item-accent) 42%, transparent);
+  box-shadow: 0 0 18px -3px color-mix(in srgb, var(--item-accent) 42%, transparent);
 }
 
 /* ---------- sliding selection ----------
@@ -555,7 +553,6 @@ html, body, #root {
   pointer-events: none;
   --sel-bg: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
   background: var(--sel-bg);
-  box-shadow: inset 2px 0 0 var(--accent);
   transition:
     transform 0.19s cubic-bezier(0.22, 1, 0.36, 1),
     height 0.19s cubic-bezier(0.22, 1, 0.36, 1);
@@ -577,18 +574,11 @@ html, body, #root {
   .selection-bg { transition: none; }
 }
 
-/* Accent-bleed rail on the sliding-selection layer. Higher specificity than the
-   base .selection-bg, so it wins regardless of source order. The glow rides the
-   layer's existing transform transition (already killed under reduced motion
-   above), so no new motion is introduced. */
-:root[data-accent-bleed="subtle"] .selection-bg,
+/* Accent-bleed glow on the sliding-selection layer. The glow rides the layer's
+   existing transform transition (already killed under reduced motion above),
+   so no new motion is introduced. */
 :root[data-accent-bleed="bold"] .selection-bg {
-  box-shadow: inset 2px 0 0 var(--item-accent);
-}
-:root[data-accent-bleed="bold"] .selection-bg {
-  box-shadow:
-    inset 3px 0 0 var(--item-accent),
-    0 0 18px -3px color-mix(in srgb, var(--item-accent) 42%, transparent);
+  box-shadow: 0 0 18px -3px color-mix(in srgb, var(--item-accent) 42%, transparent);
 }
 
 .result-icon {
@@ -650,7 +640,7 @@ html, body, #root {
    row you're looking at. Opacity only - the grid column keeps its width, so
    revealing it never re-ellipsizes titles or jolts the FLIP/slide animations. */
 .result-meta {
-  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 11px/1 var(--font-mono);
   color: var(--fg-mute);
   white-space: nowrap;
   flex-shrink: 0;
@@ -678,7 +668,7 @@ html, body, #root {
 /* Alt+1..9 badges exist only while Alt is held (data-alt-held, set by App.tsx).
    The 16px grid column stays reserved, so nothing shifts when they appear. */
 .result-shortcut {
-  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 10px/1 var(--font-mono);
   color: var(--fg-mute);
   background: var(--kbd-bg);
   border: 1px solid var(--border);
@@ -858,7 +848,7 @@ html, body, #root {
 
 .app-preview-exec {
   display: inline-block;
-  font: 400 11px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.4 var(--font-mono);
   color: var(--fg-mute);
   background: var(--accent-soft);
   border-radius: var(--radius-sm);
@@ -880,7 +870,7 @@ html, body, #root {
   border: none;
   background: var(--accent);
   color: var(--text-on-accent);
-  font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 12px/1 var(--font-ui);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -923,7 +913,7 @@ html, body, #root {
   justify-content: space-between;
   padding: 0 14px;
   color: var(--fg-mute);
-  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 11px/1 var(--font-mono);
 }
 
 .footer-right {
@@ -963,7 +953,7 @@ kbd {
   color: var(--kbd-fg);
   border: 1px solid var(--border);
   border-radius: 4px;
-  font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 10px/1 var(--font-mono);
 }
 
 /* ---------- file / folder preview ---------- */
@@ -1043,13 +1033,13 @@ kbd {
 
 .file-preview-tag {
   margin-top: 5px;
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg-mute);
 }
 
 .file-preview-path {
   margin-top: 4px;
-  font: 400 10px/1.3 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 10px/1.3 var(--font-mono);
   color: var(--fg-dim);
   word-break: break-all;
 }
@@ -1072,14 +1062,14 @@ kbd {
 :root[data-show-metadata="false"] .file-preview-meta { display: none; }
 
 .file-preview-meta-key {
-  font: 600 9px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 9px/1 var(--font-mono);
   color: var(--fg-dim);
   text-transform: uppercase;
   letter-spacing: 0.07em;
 }
 
 .file-preview-meta-val {
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
@@ -1377,7 +1367,7 @@ kbd {
 .sel-popover-btn {
   padding: 3px 9px;
   border-radius: 999px;
-  font: 500 11px/1.4 "Inter", system-ui, sans-serif;
+  font: 500 11px/1.4 var(--font-ui);
   color: var(--fg-mute);
   cursor: pointer;
 }
@@ -1388,7 +1378,7 @@ kbd {
 }
 
 .sel-popover-entity {
-  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-family: var(--font-mono);
   color: var(--accent);
 }
 
@@ -1404,7 +1394,7 @@ kbd {
 }
 
 .pdf-preview-msg {
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg-dim);
   padding: 24px;
 }
@@ -1416,7 +1406,7 @@ kbd {
   right: 8px;
   padding: 2px 7px;
   border-radius: 4px;
-  font: 600 10px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 10px/1.4 var(--font-mono);
   color: #fff;
   background: color-mix(in srgb, var(--bg-deep) 94%, #000);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
@@ -1466,7 +1456,7 @@ mark.preview-hl {
 .clipboard-text {
   margin: 0;
   padding: 12px 14px;
-  font: 400 11px/1.65 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.65 var(--font-mono);
   color: var(--fg);
   white-space: pre;
   tab-size: 2;
@@ -1490,7 +1480,7 @@ mark.preview-hl {
 }
 
 .clipboard-preview-empty {
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg-dim);
   padding: 8px 0;
 }
@@ -1537,7 +1527,7 @@ mark.preview-hl {
   border: none;
   background: none;
   border-radius: 999px;
-  font: 500 11.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 11.5px/1 var(--font-ui);
   color: var(--fg-mute);
   display: inline-flex;
   align-items: center;
@@ -1549,7 +1539,7 @@ mark.preview-hl {
 .clip-tab.active { color: var(--accent); }
 
 .clip-tab-count {
-  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 10px/1 var(--font-mono);
   color: var(--fg-dim);
 }
 
@@ -1631,7 +1621,6 @@ mark.preview-hl {
   pointer-events: none;
   --sel-bg: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
   background: var(--sel-bg);
-  box-shadow: inset 2px 0 0 var(--accent);
   transition:
     transform 0.19s cubic-bezier(0.22, 1, 0.36, 1),
     height 0.19s cubic-bezier(0.22, 1, 0.36, 1);
@@ -1653,7 +1642,6 @@ mark.preview-hl {
     color-mix(in srgb, var(--row-accent) 20%, transparent) 0%,
     color-mix(in srgb, var(--row-accent) 6%, transparent) 100%
   );
-  box-shadow: inset 2px 0 0 var(--row-accent);
 }
 
 .clip-row-icon {
@@ -1686,7 +1674,7 @@ mark.preview-hl {
 }
 
 .clip-row-shortcut {
-  font: 600 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 10px/1 var(--font-mono);
   color: var(--fg-mute);
   background: var(--kbd-bg);
   border: 1px solid var(--border);
@@ -1704,7 +1692,7 @@ mark.preview-hl {
 
 .clip-list-more {
   padding: 10px 12px;
-  font: 400 11px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.4 var(--font-mono);
   color: var(--fg-dim);
 }
 
@@ -1736,7 +1724,7 @@ mark.preview-hl {
 .clip-text-wrap::-webkit-scrollbar-track { background: transparent; }
 
 .clip-text-more {
-  font: 400 11px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.4 var(--font-mono);
   color: var(--fg-dim);
   font-style: italic;
   padding: 6px 2px 0;
@@ -1798,7 +1786,7 @@ mark.preview-hl {
   position: absolute;
   left: 12px;
   bottom: 12px;
-  font: 600 13px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 13px/1 var(--font-mono);
   color: #fff;
   background: color-mix(in srgb, var(--bg-deep) 82%, transparent);
   padding: 5px 9px;
@@ -1819,7 +1807,7 @@ mark.preview-hl {
 .clip-format-row:hover { background: var(--bg-row-hov); }
 
 .clip-format-val {
-  font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 12px/1 var(--font-mono);
   color: var(--fg);
   min-width: 0;
   overflow: hidden;
@@ -1841,7 +1829,7 @@ mark.preview-hl {
 }
 
 .clip-url-full {
-  font: 400 11px/1.5 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.5 var(--font-mono);
   color: var(--fg-mute);
   word-break: break-all;
   max-width: 100%;
@@ -1855,7 +1843,7 @@ mark.preview-hl {
   display: inline-flex;
   gap: 6px;
   align-items: center;
-  font: 500 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 11px/1 var(--font-mono);
   color: var(--fg-dim);
   margin-top: auto;
 }
@@ -1872,7 +1860,7 @@ mark.preview-hl {
   color: var(--fg-mute);
   background: var(--bg-deep);
   border-radius: 4px;
-  font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 12px/1 var(--font-mono);
 }
 
 /* empty states */
@@ -1899,7 +1887,7 @@ mark.preview-hl {
 }
 
 .clip-empty-title {
-  font: 600 14px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 14px/1.3 var(--font-ui);
   color: var(--fg);
 }
 
@@ -1934,13 +1922,11 @@ mark.preview-hl {
   padding: 4px 9px;
   border-radius: 6px;
   position: relative;
-  box-shadow: inset 2px 0 0 transparent;
-  transition: background 0.1s ease, box-shadow 0.1s ease;
+  transition: background 0.1s ease;
 }
 
 .folder-entry:hover {
   background: var(--bg-row-hov);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .folder-entry.dotfile { opacity: 0.5; }
@@ -1975,7 +1961,7 @@ mark.preview-hl {
 .folder-entry-glyph[data-cat="archive"] { color: var(--hljs-attr); }
 
 .folder-entry-name {
-  font: 400 11.5px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11.5px/1.4 var(--font-mono);
   color: var(--fg);
   white-space: nowrap;
   overflow: hidden;
@@ -1985,7 +1971,7 @@ mark.preview-hl {
 .folder-entry.is-dir .folder-entry-name { color: var(--fg); font-weight: 500; }
 
 .folder-entry-size {
-  font: 400 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 10px/1 var(--font-mono);
   color: var(--fg-dim);
   white-space: nowrap;
   flex-shrink: 0;
@@ -2016,7 +2002,7 @@ mark.preview-hl {
 
 .folder-cap-note {
   padding: 9px 9px 4px;
-  font: 400 9.5px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 9.5px/1 var(--font-mono);
   color: var(--fg-dim);
   text-align: center;
 }
@@ -2075,7 +2061,7 @@ mark.preview-hl {
 }
 .folder-empty-glyph svg { width: 20px; height: 20px; }
 .folder-empty-label {
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg-mute);
 }
 
@@ -2104,11 +2090,11 @@ mark.preview-hl {
   color: var(--fg-mute);
 }
 .file-preview-none-label {
-  font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 12px/1 var(--font-mono);
   color: var(--fg-dim);
 }
 .file-preview-none-kind {
-  font: 400 11px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1 var(--font-mono);
   color: var(--fg-mute);
 }
 
@@ -2139,7 +2125,7 @@ mark.preview-hl {
 .text-preview-code {
   margin: 0;
   padding: 12px 14px;
-  font: 400 11px/1.65 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.65 var(--font-mono);
   color: var(--fg);
   white-space: pre;
   tab-size: 2;
@@ -2149,7 +2135,7 @@ mark.preview-hl {
 
 .csv-preview {
   border-collapse: collapse;
-  font: 400 11px/1.5 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.5 var(--font-mono);
   color: var(--fg);
   width: max-content;
   max-width: none;
@@ -2221,7 +2207,7 @@ mark.preview-hl {
 
 .md-preview-wrap {
   padding: 14px 18px 18px;
-  font: 400 13px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font: 400 13px/1.7 var(--font-ui);
   color: var(--fg);
 }
 
@@ -2252,7 +2238,7 @@ mark.preview-hl {
 .md-preview-wrap p { margin: 0 0 9px; }
 
 .md-preview-wrap code {
-  font: 400 11px/1.5 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 11px/1.5 var(--font-mono);
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 3px;
@@ -2339,7 +2325,7 @@ mark.preview-hl {
   display: flex;
   align-items: center;
   padding: 14px 12px 6px;
-  font: 500 10.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font: 500 10.5px/1 var(--font-ui);
   color: var(--fg-dim);
   letter-spacing: 0.02em;
 }
@@ -2389,7 +2375,7 @@ mark.preview-hl {
 
 .ext-preview-row { padding: 5px 0; }
 
-.ext-preview-row-mono { font-family: monospace; font-size: 12px; }
+.ext-preview-row-mono { font-family: var(--font-mono); font-size: 12px; }
 
 .ext-preview-row-tag {
   display: inline-block;
@@ -2425,7 +2411,7 @@ mark.preview-hl {
 
 /* Two-column cmd cell (vim-style: :e | reload file) */
 .ext-preview-section-cmd {
-  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--accent);
   white-space: nowrap;
@@ -2435,7 +2421,7 @@ mark.preview-hl {
 
 /* Full-width solo command (tldr-style) */
 .ext-preview-section-solo {
-  font-family: ui-monospace, 'Cascadia Code', 'SF Mono', 'Fira Code', monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   color: var(--fg);
   display: inline-block;
@@ -2448,7 +2434,7 @@ mark.preview-hl {
 .ext-preview-section-desc { color: var(--fg-dim); font-size: 12px; }
 
 .ext-preview-code {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -2598,7 +2584,7 @@ mark.preview-hl {
   right: 8px;
   padding: 2px 7px;
   border-radius: 4px;
-  font: 600 10px/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 10px/1.4 var(--font-mono);
   color: #fff;
   background: color-mix(in srgb, var(--bg-deep) 94%, #000);
   border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
@@ -2716,7 +2702,7 @@ mark.preview-hl {
   animation: action-panel-up 0.14s ease-out forwards;
   /* .footer forces a monospace font shorthand; reset to the app sans stack so
      rows match result rows (kbd badges re-declare their own mono font). */
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-ui);
 }
 
 @keyframes action-panel-up {
@@ -2752,7 +2738,6 @@ mark.preview-hl {
 
 .action-panel-row.selected {
   background: color-mix(in srgb, var(--bg-row-sel) 72%, var(--bg-card));
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .action-panel-title {
@@ -2942,7 +2927,7 @@ mark.preview-hl {
 }
 
 .ext-form-footer kbd {
-  font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 10px/1 var(--font-mono);
   color: var(--fg-mute);
   background: var(--bg-card);
   border: 1px solid var(--line);
@@ -3109,7 +3094,7 @@ mark.preview-hl {
 }
 
 .result-badge {
-  font: 500 10px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 10px/1 var(--font-mono);
   color: var(--accent);
   background: var(--accent-soft);
   border-radius: 3px;

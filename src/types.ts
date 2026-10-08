@@ -93,6 +93,14 @@ export interface Config {
     slide_selection: boolean;
     grain: number;
     accent_bleed: "off" | "subtle" | "bold";
+    /** UI font family; "" = built-in system stack. */
+    font_family: string;
+    /** Monospace font family; "" = built-in stack. */
+    mono_font_family: string;
+    /** Background surface opacity, 0.3–1. */
+    opacity: number;
+    /** Ask the compositor to blur behind translucent surfaces. */
+    blur: boolean;
   };
   keybinds: KeybindsConfig;
   /** Per-extension state keyed by name. Absent = disabled. */

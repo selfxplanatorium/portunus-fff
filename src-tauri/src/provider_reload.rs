@@ -46,6 +46,11 @@ pub fn rebuild_providers(
 
     // Keybinds are dispatched frontend-side: push the new section as-is, no
     // provider rebuild for a keybinds-only edit.
+    if new_cfg.appearance.blur != old_cfg.appearance.blur {
+        let enabled = new_cfg.appearance.blur;
+        std::thread::spawn(move || crate::layer_shell::apply_compositor_blur(enabled));
+    }
+
     if new_cfg.keybinds != old_cfg.keybinds {
         keybinds_cb(&new_cfg.keybinds);
     }

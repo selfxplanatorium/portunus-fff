@@ -99,7 +99,7 @@ a:focus-visible,
   --radius:     14px;
   --radius-sm:  8px;
 
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -150,7 +150,7 @@ a:focus-visible,
 }
 
 .settings-brand-text {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   color: var(--fg-mute);
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -162,7 +162,7 @@ a:focus-visible,
 }
 
 .settings-section-title {
-  font: 500 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 var(--fs-desc)/1 var(--font-ui);
   color: var(--fg-mute);
 }
 
@@ -454,7 +454,7 @@ a:focus-visible,
   background: transparent;
   border: none;
   color: var(--fg);
-  font: 500 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 var(--fs-body)/1 var(--font-ui);
   text-align: center;
   outline: none;
   padding: 0 4px;
@@ -476,7 +476,7 @@ a:focus-visible,
   border: 1px solid var(--border);
   border-radius: 7px;
   color: var(--fg);
-  font: 400 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-body)/1 var(--font-ui);
   padding: 0 11px;
   outline: none;
   transition: border-color 0.12s;
@@ -486,7 +486,7 @@ a:focus-visible,
   border-color: var(--accent);
 }
 
-.settings-text-input.mono { font-family: ui-monospace, "JetBrains Mono", monospace; font-size: var(--fs-micro); }
+.settings-text-input.mono { font-family: var(--font-mono); font-size: var(--fs-micro); }
 
 /* ---------- custom select ---------- */
 
@@ -501,7 +501,7 @@ a:focus-visible,
   border: 1px solid var(--border);
   border-radius: 7px;
   color: var(--fg);
-  font: 400 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-body)/1 var(--font-ui);
   padding: 0 10px;
   outline: none;
   cursor: pointer;
@@ -543,9 +543,13 @@ a:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 1px;
+  /* Font pickers list every installed family; scroll instead of overflowing the window. */
+  max-height: 280px;
+  overflow-y: auto;
 }
 
 .settings-select-option {
+  flex-shrink: 0; /* keep row height when the dropdown scrolls */
   display: block;
   width: 100%;
   padding: 7px 10px;
@@ -553,7 +557,7 @@ a:focus-visible,
   border: none;
   border-radius: 4px;
   color: var(--fg-mute);
-  font: 400 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-body)/1 var(--font-ui);
   cursor: pointer;
   text-align: left;
   transition: background 0.1s, color 0.1s;
@@ -596,7 +600,7 @@ a:focus-visible,
   border: 1px solid var(--border);
   border-radius: 7px;
   color: var(--fg);
-  font: 400 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 12px/1 var(--font-mono);
   padding: 0 10px;
   outline: none;
   width: 100%;
@@ -642,7 +646,7 @@ a:focus-visible,
 .settings-dir-depth-val {
   flex: 1;
   text-align: center;
-  font: 500 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 12px/1 var(--font-mono);
   color: var(--fg);
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
@@ -756,7 +760,7 @@ a:focus-visible,
   display: flex;
   align-items: center;
   gap: 7px;
-  font: 400 var(--fs-micro)/1.3 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 var(--fs-micro)/1.3 var(--font-mono);
   color: var(--fg-dim);
 }
 
@@ -808,7 +812,7 @@ a:focus-visible,
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font: 400 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 var(--fs-micro)/1 var(--font-mono);
   color: var(--fg-mute);
   background: var(--icon-bg);
   border: 1px solid var(--border);
@@ -836,7 +840,7 @@ a:focus-visible,
   background: none;
   border: none;
   outline: none;
-  font: 400 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 400 var(--fs-micro)/1 var(--font-mono);
   color: var(--fg);
   min-width: 60px;
   flex: 1;
@@ -864,7 +868,7 @@ a:focus-visible,
 }
 
 .settings-dep-inline-warn code {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: 10.5px;
   padding: 1px 4px;
   border-radius: 3px;
@@ -942,7 +946,7 @@ a:focus-visible,
 
 .settings-dep-tool-tag {
   flex-shrink: 0;
-  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   color: var(--fg-mute);
   background: var(--kbd-bg);
@@ -996,7 +1000,7 @@ a:focus-visible,
   height: 28px;
   padding: 0 12px;
   border-radius: 6px;
-  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 11px/1 var(--font-ui);
   cursor: pointer;
   transition: background 0.1s;
 }
@@ -1062,7 +1066,7 @@ a:focus-visible,
   height: 24px;
   padding: 0 10px;
   border-radius: 5px;
-  font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 11px/1 var(--font-ui);
   cursor: pointer;
 }
 
@@ -1096,7 +1100,7 @@ a:focus-visible,
 
 .settings-footer-status {
   margin-right: auto;
-  font: 500 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 12px/1 var(--font-ui);
 }
 
 .settings-save-status {
@@ -1116,7 +1120,7 @@ a:focus-visible,
   border: none;
   background: var(--accent);
   color: var(--text-on-accent);
-  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 var(--font-ui);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1147,7 +1151,7 @@ a:focus-visible,
 }
 
 .settings-nav-group-label {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.13em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -1214,7 +1218,7 @@ a:focus-visible,
 }
 
 .settings-section-master-state {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -1232,7 +1236,7 @@ a:focus-visible,
 .settings-group-block:last-child { margin-bottom: 0; }
 
 .settings-group-title {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--fg-mute);
@@ -1304,7 +1308,7 @@ a:focus-visible,
   flex-shrink: 0;
   min-width: 52px;
   text-align: right;
-  font: 500 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 12px/1 var(--font-mono);
   color: var(--accent);
 }
 
@@ -1382,7 +1386,7 @@ a:focus-visible,
   flex-shrink: 0;
   min-width: 92px;
   text-align: right;
-  font: 500 12px/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 12px/1 var(--font-mono);
   color: var(--accent);
 }
 
@@ -1434,7 +1438,7 @@ a:focus-visible,
 }
 
 .settings-copy-hint:hover { border-color: var(--accent); color: var(--accent); }
-.settings-copy-hint code { font-family: monospace; font-size: 10.5px; background: none; padding: 0; }
+.settings-copy-hint code { font-family: var(--font-mono); font-size: 10.5px; background: none; padding: 0; }
 .settings-copy-hint-icon { font-size: 11px; opacity: 0.7; }
 
 /* ---------- extension rows ---------- */
@@ -1448,7 +1452,7 @@ a:focus-visible,
 }
 
 .settings-ext-perms code {
-  font-family: monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   padding: 1px 5px;
   border-radius: 3px;
@@ -1465,7 +1469,7 @@ a:focus-visible,
   border: 1px solid var(--border-raised);
   background: var(--kbd-bg);
   color: var(--fg);
-  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 var(--font-ui);
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
 }
@@ -1487,7 +1491,7 @@ a:focus-visible,
   border: 1px solid var(--accent-border, var(--accent));
   background: var(--accent-soft);
   color: var(--accent);
-  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 var(--font-ui);
   cursor: pointer;
   transition: background 0.12s;
 }
@@ -1501,7 +1505,7 @@ a:focus-visible,
   border: 1px solid transparent;
   background: transparent;
   color: var(--fg-mute);
-  font: 600 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-desc)/1 var(--font-ui);
   cursor: pointer;
   transition: color 0.12s, border-color 0.12s;
 }
@@ -1526,7 +1530,7 @@ a:focus-visible,
 /* ---------- badge primitive ---------- */
 
 .settings-badge {
-  font: 600 var(--fs-micro)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-micro)/1 var(--font-ui);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   padding: 2px 6px;
@@ -1569,7 +1573,7 @@ a:focus-visible,
 
 .settings-modal-title {
   padding: 16px 18px 12px;
-  font: 600 var(--fs-body)/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 600 var(--fs-body)/1.2 var(--font-ui);
   color: var(--fg);
   border-bottom: 1px solid var(--line-soft);
 }
@@ -1619,7 +1623,7 @@ a:focus-visible,
   background: none;
   outline: none;
   color: var(--fg);
-  font: 400 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-desc)/1 var(--font-ui);
 }
 .settings-ext-filter input::placeholder { color: var(--fg-dim); }
 
@@ -1660,11 +1664,11 @@ a:focus-visible,
 .settings-ext-chevron { color: var(--fg-mute); transition: transform 0.12s; flex-shrink: 0; }
 .settings-ext-card.expanded .settings-ext-card-header .settings-ext-chevron { transform: rotate(90deg); }
 
-.settings-ext-card-name { font: 600 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); flex-shrink: 0; }
+.settings-ext-card-name { font: 600 var(--fs-body)/1 var(--font-ui); color: var(--fg); flex-shrink: 0; }
 .settings-ext-card-spacer { flex: 1; }
 
 .settings-ext-onoff {
-  font: 600 var(--fs-micro)/1 ui-monospace, "JetBrains Mono", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.05em;
   flex-shrink: 0;
 }
@@ -1689,14 +1693,14 @@ a:focus-visible,
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--fg-mute);
-  font: 500 var(--fs-desc)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 500 var(--fs-desc)/1 var(--font-ui);
   cursor: pointer;
   transition: color 0.12s, border-color 0.12s;
 }
 .settings-ext-tab:hover { color: var(--fg); }
 .settings-ext-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
-.settings-ext-tab-count { font: 400 var(--fs-micro)/1 ui-monospace, "JetBrains Mono", monospace; color: var(--fg-dim); }
-.settings-ext-tab-alert { font: 600 var(--fs-micro)/1 ui-monospace, monospace; color: var(--danger-fg); }
+.settings-ext-tab-count { font: 400 var(--fs-micro)/1 var(--font-mono); color: var(--fg-dim); }
+.settings-ext-tab-alert { font: 600 var(--fs-micro)/1 var(--font-mono); color: var(--danger-fg); }
 
 .settings-ext-tabpanel { padding: 16px 15px; }
 .settings-ext-tab-empty { font-size: var(--fs-desc); color: var(--fg-dim); }
@@ -1750,11 +1754,11 @@ a:focus-visible,
 }
 .settings-ext-cmd-mode { display: inline-flex; }
 .settings-ext-cmd-triggers { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.settings-ext-cmd-always { font: 400 var(--fs-micro)/1 ui-monospace, "JetBrains Mono", monospace; color: var(--fg-dim); white-space: nowrap; }
+.settings-ext-cmd-always { font: 400 var(--fs-micro)/1 var(--font-mono); color: var(--fg-dim); white-space: nowrap; }
 /* Trigger keywords are metadata, not state - neutral keycap tokens keep the one
    accent reserved for the SCOPE badge and live indicators. */
 .settings-ext-cmd-row code {
-  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   padding: 3px 7px;
   border-radius: 4px;
@@ -1802,13 +1806,13 @@ a:focus-visible,
   flex: 1;
   min-width: 0;
   text-align: right;
-  font: 400 var(--fs-micro)/1.4 ui-monospace, "JetBrains Mono", monospace;
+  font: 400 var(--fs-micro)/1.4 var(--font-mono);
   color: var(--fg-mute);
   overflow-wrap: anywhere;
 }
 .settings-ext-perm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .settings-ext-perm-chips code {
-  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   padding: 3px 7px;
   border-radius: 4px;
@@ -1866,7 +1870,7 @@ a:focus-visible,
 }
 
 .settings-ext-danger code {
-  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 4px;
@@ -1946,14 +1950,14 @@ a:focus-visible,
 .settings-ext-secret-row .settings-text-input { flex: 1; min-width: 0; }
 .settings-ext-secret-row .settings-badge { flex-shrink: 0; }
 .settings-ext-secret-hint {
-  font: 400 var(--fs-micro)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-micro)/1.4 var(--font-ui);
   color: var(--fg-mute);
 }
 .settings-ext-secret-warn { color: var(--danger-fg); }
 
 /* Inline validation error under an extension settings field. */
 .settings-ext-field-error {
-  font: 400 var(--fs-desc)/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 400 var(--fs-desc)/1.4 var(--font-ui);
   color: var(--danger-fg);
   margin-top: 2px;
 }
@@ -1970,7 +1974,7 @@ a:focus-visible,
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
-  font-family: ui-monospace, "JetBrains Mono", monospace;
+  font-family: var(--font-mono);
   font-size: var(--fs-micro);
   line-height: 1.6;
   background: var(--bg-deep);
@@ -2005,7 +2009,7 @@ a:focus-visible,
 
 .settings-ext-consent { display: flex; flex-direction: column; gap: 8px; }
 .settings-ext-consent-head { display: flex; align-items: baseline; gap: 8px; }
-.settings-ext-consent-name { font: 600 var(--fs-body)/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); }
+.settings-ext-consent-name { font: 600 var(--fs-body)/1 var(--font-ui); color: var(--fg); }
 .settings-ext-consent-author { font-size: var(--fs-desc); color: var(--fg-dim); }
 
 .settings-ext-hash { font-size: var(--fs-micro); color: var(--fg-dim); }
@@ -2150,7 +2154,7 @@ a:focus-visible,
   flex-shrink: 0;
   width: 15px;
   text-align: center;
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   color: var(--fg-mute);
   font-variant-numeric: tabular-nums;
 }
@@ -2214,7 +2218,7 @@ a:focus-visible,
 
 .weight-readout {
   min-width: 48px;
-  font: 500 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1 var(--font-mono);
   color: var(--fg-mute);
 }
 .weight-readout.hide { color: var(--danger-fg); }
@@ -2229,7 +2233,7 @@ a:focus-visible,
 /* ---------- ranking: group reset ---------- */
 
 .settings-group-reset {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-mute);
@@ -2272,7 +2276,7 @@ a:focus-visible,
   min-width: 2px;
 }
 .settings-scorebar-nums {
-  font: 500 var(--fs-micro)/1.2 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1.2 var(--font-mono);
   color: var(--fg-mute);
   white-space: nowrap;
 }
@@ -2383,7 +2387,7 @@ a:focus-visible,
 }
 
 .settings-playground-delta {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   text-align: right;
   color: var(--fg-dim);
 }
@@ -2429,7 +2433,7 @@ a:focus-visible,
 .settings-pin-row.stale { opacity: 0.6; }
 
 .settings-pin-query {
-  font: 500 var(--fs-micro)/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1.4 var(--font-mono);
   background: var(--kbd-bg);
   color: var(--kbd-fg);
   border-radius: 4px;
@@ -2486,7 +2490,7 @@ a:focus-visible,
   line-height: 1.6;
 }
 .settings-pin-empty kbd {
-  font: 500 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1 var(--font-mono);
   background: var(--kbd-bg);
   color: var(--kbd-fg);
   border-radius: 3px;
@@ -2520,13 +2524,13 @@ a:focus-visible,
   min-width: 0;
 }
 .settings-gcard-label {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--accent);
 }
 .settings-gcard-sub {
-  font: 500 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1 var(--font-mono);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--fg-dim);
@@ -2557,7 +2561,7 @@ a:focus-visible,
   border: 1px solid var(--border);
   background: none;
   color: var(--fg-mute);
-  font: 500 var(--fs-desc)/1 -apple-system, sans-serif;
+  font: 500 var(--fs-desc)/1 var(--font-ui);
   cursor: pointer;
   transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
@@ -2568,7 +2572,7 @@ a:focus-visible,
   color: var(--accent);
 }
 .settings-filter-chip-count {
-  font: 600 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 600 var(--fs-micro)/1 var(--font-mono);
   color: var(--fg-dim);
 }
 .settings-filter-chip--active .settings-filter-chip-count { color: var(--accent); }
@@ -2611,7 +2615,7 @@ a:focus-visible,
   text-overflow: ellipsis;
 }
 .settings-keybind-id {
-  font: 500 var(--fs-micro)/1.4 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1.4 var(--font-mono);
   color: var(--fg-mute);
 }
 .settings-keybind-hint {
@@ -2655,7 +2659,7 @@ a:focus-visible,
   width: auto;
   gap: 4px;
   padding: 3px 8px;
-  font: 500 var(--fs-micro)/1 -apple-system, sans-serif;
+  font: 500 var(--fs-micro)/1 var(--font-ui);
   color: var(--fg-mute);
   opacity: 1;
 }
@@ -2670,7 +2674,7 @@ a:focus-visible,
   border: 1px solid transparent;
   border-radius: 6px;
   padding: 3px 9px 3px 7px;
-  font: 600 var(--fs-micro)/1 -apple-system, sans-serif;
+  font: 600 var(--fs-micro)/1 var(--font-ui);
   cursor: pointer;
   transition: filter 0.12s;
 }
@@ -2713,7 +2717,7 @@ a:focus-visible,
 .settings-kbd {
   display: inline-flex;
   align-items: center;
-  font: 500 var(--fs-micro)/1 "JetBrains Mono", "Fira Code", monospace;
+  font: 500 var(--fs-micro)/1 var(--font-mono);
   background: var(--kbd-bg);
   color: var(--kbd-fg);
   border-radius: 4px;
@@ -2735,7 +2739,7 @@ a:focus-visible,
   align-items: center;
   gap: 6px;
   color: var(--fg-mute);
-  font: 500 var(--fs-desc)/1 -apple-system, sans-serif;
+  font: 500 var(--fs-desc)/1 var(--font-ui);
 }
 .settings-keybind-chip--none:hover .settings-keybind-add { color: var(--accent); }
 
