@@ -170,7 +170,7 @@ jobs:
       - name: Render AUR PKGBUILD with release checksum
         # Tag-only. Fills the @PKGVER@/@SHA256@ placeholders in the template
         # packaging/aur/PKGBUILD with the tag version and the sha256 of the built
-        # .deb (the AUR portunus-bin package downloads that .deb from the release),
+        # .deb (the portunus-fff-bin package downloads that .deb from the release),
         # writing the result to dist/PKGBUILD for upload below.
         if: startsWith(github.ref, 'refs/tags/')
         run: |

@@ -10,21 +10,22 @@
 # and OCR work with nothing extra installed. It links the host's own
 # WebKitGTK/GTK (depends below), so no stale bundled WebKit.
 
-pkgname=portunus-bin
+pkgname=portunus-fff-bin
 _pkgname=portunus
 pkgver=@PKGVER@
 pkgrel=1
 pkgdesc="Application launcher and power-user search for Wayland (portunus fork with fff file search)"
 arch=('x86_64')
-url="https://github.com/selfxplanatorium/portunus"
+url="https://github.com/selfxplanatorium/portunus-fff"
 license=('Apache-2.0')
 provides=("portunus=$pkgver")
-conflicts=('portunus')
+conflicts=('portunus' 'portunus-bin')   # upstream packages ship the same /usr/bin/portunus
 options=('!debug')   # strip vendored ELFs; no separate -debug split for prebuilts
 depends=(
   'webkit2gtk-4.1'
   'gtk3'
   'gtk-layer-shell'   # binary links it; needed even though layer_shell is opt-in
+  'zlib'              # libz.so.1, linked by fff's libgit2 (file index)
   'libarchive'        # bundled libtesseract.so.5 links libarchive.so.13 (not bundled)
   'nss'               # bundled libpoppler.so.134 links libnss3/libsmime3 (PDF sig verify)
   'nspr'              # transitive of nss (libnspr4/libplc4/libplds4)

@@ -119,18 +119,18 @@ reduced-motion system settings are respected.
 
 ## Install
 
-Download a package from this fork's [Releases page](https://github.com/selfxplanatorium/portunus/releases)
+Download a package from this fork's [Releases page](https://github.com/selfxplanatorium/portunus-fff/releases)
 (the upstream releases do not include the fff engine). All of them are **x86_64 only**.
 On other architectures use the Nix flake or build from source.
 
 ### Arch Linux
 
-The release ships a ready-to-build `PKGBUILD` for `portunus-bin`, which installs
+The release ships a ready-to-build `PKGBUILD` for `portunus-fff-bin`, which installs
 the prebuilt `.deb` above. Its `sha256sum` is filled in by CI at release time, so
 there is nothing to edit:
 
 ```bash
-curl -fLO https://github.com/selfxplanatorium/portunus/releases/latest/download/PKGBUILD
+curl -fLO https://github.com/selfxplanatorium/portunus-fff/releases/latest/download/PKGBUILD
 makepkg -si
 ```
 
@@ -193,7 +193,7 @@ build such as `pdfium-bin`, and tesseract with the language data you want
 ### Nix (flake)
 
 ```bash
-nix run github:selfxplanatorium/portunus
+nix run github:selfxplanatorium/portunus-fff
 ```
 
 The `portunus.cachix.org` cache below holds upstream builds, not this fork's, so
@@ -214,7 +214,7 @@ nix.settings = {
 For a one-off run, `--accept-flake-config` does the same job:
 
 ```bash
-nix run --accept-flake-config github:selfxplanatorium/portunus
+nix run --accept-flake-config github:selfxplanatorium/portunus-fff
 ```
 
 The wrapper puts libpdfium, the poppler tools, cliphist, wl-clipboard, wtype, the
