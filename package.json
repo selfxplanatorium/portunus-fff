@@ -2,7 +2,7 @@
   "name": "portunus-fff",
   "description": "Application launcher and power-user search for Wayland",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.7.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

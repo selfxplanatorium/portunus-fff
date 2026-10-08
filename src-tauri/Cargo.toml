@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "portunus"
-version = "0.6.1"
+version = "0.7.0"
 license = "Apache-2.0"
 description = "Application launcher and power-user search for Wayland"
 authors = ["SzilBalazs"]
