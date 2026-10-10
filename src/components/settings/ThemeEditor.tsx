@@ -5,6 +5,9 @@ import {
 } from "../../themeTokens";
 import ThemeGrid, { THEMES, baseTokens, useMatugenTokens } from "./ThemeGrid";
 import ColorInput from "./ColorInput";
+import Slider from "./Slider";
+import SwatchPicker from "./SwatchPicker";
+import { Darkness, QuickParams, SUGGESTED_ACCENTS, estimateParams, generatePalette } from "../../themeGen";
 import Modal from "./Modal";
 import Select from "./Select";
 import SettingsField from "./SettingsField";
@@ -35,13 +38,22 @@ function sameRgb(a: string | undefined, b: string | undefined): boolean {
   return !!x && !!y && x.r === y.r && x.g === y.g && x.b === y.b;
 }
 
+const DARKNESS_OPTIONS: { label: string; value: Darkness }[] = [
+  { label: "Dark", value: "dark" },
+  { label: "Darker", value: "darker" },
+  { label: "Black (OLED)", value: "black" },
+];
+
+const tintLabel = (v: number) => (v === 0 ? "Neutral" : v >= 1 ? "Colorful" : `${Math.round(v * 100)}%`);
+
 const omit = (o: Record<string, string>, keys: string[]) =>
   Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)));
 
 /**
- * Theme picker + full color editor. On a built-in theme, edits are unsaved
- * overrides (`[appearance] colors`) until saved as a preset; on a preset they
- * write straight into that preset.
+ * Theme picker + color editor. "Quick theme" derives every color from one main
+ * color (themeGen.ts); "all colors" edits each token. On a built-in theme,
+ * edits are unsaved overrides (`[appearance] colors`) until saved as a preset;
+ * on a preset they write straight into that preset.
  */
 export default function ThemeEditor({ appearance, set }: Props) {
   const matugen = useMatugenTokens();
@@ -53,6 +65,7 @@ export default function ThemeEditor({ appearance, set }: Props) {
   const dirty = !preset && Object.keys(overrides).length > 0;
 
   const [editing, setEditing] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [saveOpen, setSaveOpen] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [pendingTheme, setPendingTheme] = useState<string | null>(null);
@@ -97,6 +110,12 @@ export default function ThemeEditor({ appearance, set }: Props) {
   };
 
   const resetToken = (name: string) => writeColors({}, [name]);
+
+  // Read back from the live colors each render, so the controls always
+  // describe what's on screen (no separate state to drift).
+  const quick = estimateParams(effective);
+  const applyQuick = (patch: Partial<QuickParams>) =>
+    writeColors(generatePalette({ ...quick, ...patch }));
 
   const selectTheme = (id: string) => {
     if (id === appearance.theme) return;
@@ -151,7 +170,7 @@ export default function ThemeEditor({ appearance, set }: Props) {
               onClick={() => setEditing(e => !e)}
               aria-expanded={editing}
             >
-              {editing ? "Done" : "Customize colors"}
+              {editing ? "Done" : "Customize"}
             </button>
           </div>
         </div>
@@ -189,7 +208,48 @@ export default function ThemeEditor({ appearance, set }: Props) {
         </SettingsGroup>
       )}
 
-      {editing && TOKEN_GROUPS.map(group => (
+      {editing && (
+        <SettingsGroup
+          title="Quick theme"
+          desc="Pick one main color; backgrounds, text, borders and code colors are matched to it automatically."
+          action={
+            <button className="settings-btn-secondary" onClick={() => setShowAll(v => !v)} aria-expanded={showAll}>
+              {showAll ? "Hide individual colors" : "Fine-tune individual colors"}
+            </button>
+          }
+        >
+          <SettingsField name="Main color" desc="Used for highlights, the selection and buttons." stacked>
+            <SwatchPicker
+              label="Main color"
+              value={quick.accent}
+              swatches={SUGGESTED_ACCENTS}
+              onChange={accent => applyQuick({ accent })}
+            />
+          </SettingsField>
+          <SettingsField name="Darkness" desc="How dark the window and panels are.">
+            <Select
+              options={DARKNESS_OPTIONS.map(o => ({ label: o.label }))}
+              value={DARKNESS_OPTIONS.find(o => o.value === quick.darkness)?.label ?? "Dark"}
+              onChange={label => {
+                const o = DARKNESS_OPTIONS.find(x => x.label === label);
+                if (o) applyQuick({ darkness: o.value });
+              }}
+            />
+          </SettingsField>
+          <SettingsField name="Background tint" desc="Neutral grey panels, or panels tinted toward the main color.">
+            <Slider
+              label="Background tint"
+              value={quick.tint}
+              min={0} max={1} step={0.05}
+              format={tintLabel}
+              commitOnRelease
+              onChange={tint => applyQuick({ tint })}
+            />
+          </SettingsField>
+        </SettingsGroup>
+      )}
+
+      {editing && showAll && TOKEN_GROUPS.map(group => (
         <SettingsGroup
           key={group.title}
           title={group.title}

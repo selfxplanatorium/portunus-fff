@@ -78,8 +78,8 @@ New options under **Settings → Appearance**:
   applied at runtime via `hyprctl`; for other compositors, Settings shows the
   rule to add yourself.
 - **Fonts**: pick the interface and monospace fonts from your installed fonts.
-- **Custom themes**: edit every color token of any theme and save the result
-  as your own preset.
+- **Custom themes**: build a whole theme from one color, or edit every color
+  token, and save the result as your own preset.
 
 ### Motion
 
@@ -334,7 +334,13 @@ Pick a theme in **Settings → Appearance**. Eight dark themes ship built-in, pl
 
 #### Custom colors and presets
 
-**Customize colors** opens an editor for every color token (surfaces, text,
+**Customize** starts with a **Quick theme**: pick one main color (a suggestion
+or any color), how dark the panels are (Dark, Darker, Black for OLED) and how
+much they're tinted toward that color. Everything else (backgrounds, text,
+borders, the selection, readable text on the accent, code colors) is derived
+from it in OKLCH, so any hue stays legible.
+
+**Fine-tune individual colors** opens an editor for every color token (surfaces, text,
 accent, lines, controls, syntax highlighting): a picker plus a field that takes
 any CSS color, `rgba(…)` included. On a built-in theme your edits are unsaved
 changes on top of it; **Save as preset** stores them as your own theme, listed
