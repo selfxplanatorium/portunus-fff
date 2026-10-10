@@ -1,7 +1,7 @@
 import { ReactNode, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Config } from "../../types";
-import ThemeGrid from "./ThemeGrid";
+import ThemeEditor from "./ThemeEditor";
 import Toggle from "./Toggle";
 import Select from "./Select";
 import SectionHeader from "./SectionHeader";
@@ -72,7 +72,7 @@ export default function AppearanceSection({ config, onChange }: Props) {
     invoke<DeSetupInfo>("de_setup_info").then(i => setDe(i.de)).catch(() => setDe(null));
   }, []);
 
-  const { theme, font_size, animate_results, show_metadata, slide_selection, grain, accent_bleed } = config.appearance;
+  const { font_size, animate_results, show_metadata, slide_selection, grain, accent_bleed } = config.appearance;
   const opacity = config.appearance.opacity ?? 1;
   const blurHint = BLUR_HINTS[de ?? "other"] ?? BLUR_HINTS.other;
 
@@ -80,10 +80,7 @@ export default function AppearanceSection({ config, onChange }: Props) {
     <div className="settings-section">
       <SectionHeader title="Appearance" desc="Theme, scale, and launcher visuals." />
 
-      <div className="settings-group-block">
-        <div className="settings-group-title">Theme</div>
-        <ThemeGrid value={theme} onSelect={id => set({ theme: id })} />
-      </div>
+      <ThemeEditor appearance={config.appearance} set={set} />
 
       <SettingsGroup title="Display">
         <SettingsField name="Interface scale" desc="Scale the entire launcher UI proportionally.">

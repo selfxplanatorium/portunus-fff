@@ -78,6 +78,8 @@ New options under **Settings → Appearance**:
   applied at runtime via `hyprctl`; for other compositors, Settings shows the
   rule to add yourself.
 - **Fonts**: pick the interface and monospace fonts from your installed fonts.
+- **Custom themes**: edit every color token of any theme and save the result
+  as your own preset.
 
 ### Motion
 
@@ -310,6 +312,32 @@ window_animations = true     # entrance + search-bar-to-window morph
 ### Themes
 
 Pick a theme in **Settings → Appearance**. Eight dark themes ship built-in, plus a Matugen theme that pulls its colors from your wallpaper.
+
+#### Custom colors and presets
+
+**Customize colors** opens an editor for every color token (surfaces, text,
+accent, lines, controls, syntax highlighting): a picker plus a field that takes
+any CSS color, `rgba(…)` included. On a built-in theme your edits are unsaved
+changes on top of it; **Save as preset** stores them as your own theme, listed
+next to the built-ins. Edits to a selected preset save straight into it, and it
+can be renamed, rebased on another theme, duplicated or deleted. Presets live in
+the config, so they can be written by hand too:
+
+```toml
+[appearance]
+theme = "custom:ember"          # a preset id, or a built-in theme name
+
+[appearance.colors]             # unsaved tweaks on top of the theme or preset
+fg = "#f2e8dc"
+
+[[appearance.custom_themes]]
+id   = "ember"
+name = "Ember"
+base = "carbon"                 # tokens not listed below come from this theme
+colors = { accent = "#ff8a3d", accent-soft = "rgba(255, 138, 61, 0.12)", bg-card = "#1b1714" }
+```
+
+Token names are the theme variables without `--` (see [`src/themes.css`](src/themes.css)).
 
 #### Matugen (Material You from your wallpaper)
 

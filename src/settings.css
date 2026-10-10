@@ -2791,3 +2791,56 @@ a:focus-visible,
 @media (prefers-reduced-motion: reduce) {
   .settings-keybind-chip--flash { animation: none; }
 }
+
+/* ---------- color input (theme editor) ---------- */
+
+.settings-color {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 230px;
+}
+
+.settings-color-swatch {
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  cursor: pointer;
+  /* Checkerboard so translucent tokens read as translucent. */
+  background: repeating-conic-gradient(var(--fg-dim) 0 25%, var(--kbd-bg) 0 50%) 0 0 / 10px 10px;
+}
+.settings-color-swatch:hover { border-color: var(--fg-dim); }
+.settings-color-swatch > span { position: absolute; inset: 0; }
+.settings-color-swatch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.settings-color .settings-text-input { flex: 1; min-width: 0; }
+.settings-text-input.invalid { border-color: var(--danger-fg); }
+
+.settings-color-reset {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-mute);
+  cursor: pointer;
+}
+.settings-color-reset:hover:not(:disabled) { color: var(--accent); background: var(--bg-row-hov); }
+.settings-color-reset:disabled { visibility: hidden; }
+
+.theme-dirty-note { margin-top: 10px; }

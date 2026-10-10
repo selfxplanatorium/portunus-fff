@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Config } from "./types";
+import { colorDeclarations, resolveTheme } from "./themeTokens";
 
 const MATUGEN_THEME = "matugen";
 const MATUGEN_STYLE_ID = "matugen-theme";
+const CUSTOM_STYLE_ID = "custom-colors";
 
 /** Fetch the external matugen.css from the backend and inject it as a <style>
  *  element. The CSS is scoped to `:root[data-theme="matugen"]`, so it only takes
@@ -50,9 +52,32 @@ function applySurfaceOpacity(root: HTMLElement, opacity: number | undefined) {
   }
 }
 
+/** Paint preset colors + unsaved edits over the base theme. The rule is
+ *  gated on `data-custom-colors` and outranks `:root[data-theme="…"]` on
+ *  specificity, so stylesheet order doesn't matter. Kept out of inline style
+ *  because the opacity pass rewrites the surface tokens inline. */
+function applyCustomColors(root: HTMLElement, colors: Record<string, string>) {
+  const decls = colorDeclarations(colors);
+  let el = document.getElementById(CUSTOM_STYLE_ID) as HTMLStyleElement | null;
+  if (!decls) {
+    root.removeAttribute("data-custom-colors");
+    el?.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement("style");
+    el.id = CUSTOM_STYLE_ID;
+    document.head.appendChild(el);
+  }
+  el.textContent = `:root[data-theme][data-custom-colors] {\n${decls}\n}`;
+  root.setAttribute("data-custom-colors", "");
+}
+
 export function applyTheme(appearance: Config["appearance"]) {
   const root = document.documentElement;
-  root.setAttribute("data-theme", appearance.theme);
+  const { base, preset, overrides } = resolveTheme(appearance);
+  root.setAttribute("data-theme", base);
+  applyCustomColors(root, { ...preset, ...overrides });
   setFont(root, "--font-ui", appearance.font_family, UI_STACK);
   setFont(root, "--font-mono", appearance.mono_font_family, MONO_STACK);
   // The whole UI scales via root zoom. Publish the factor and its reciprocal:
@@ -70,7 +95,7 @@ export function applyTheme(appearance: Config["appearance"]) {
   root.dataset.windowMotion = appearance.window_animations === false ? "off" : "on";
   root.style.setProperty("--grain-opacity", String(appearance.grain ?? 0.07));
   // matugen's token values arrive with its stylesheet, so fade after injecting.
-  if (appearance.theme === MATUGEN_THEME) {
+  if (base === MATUGEN_THEME) {
     void injectMatugenTheme().then(() => applySurfaceOpacity(root, appearance.opacity));
   } else {
     applySurfaceOpacity(root, appearance.opacity);

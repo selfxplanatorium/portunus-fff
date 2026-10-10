@@ -1,12 +1,28 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import rawCss from "../../themes.css?raw";
+import type { CustomTheme } from "../../types";
+import { CUSTOM_PREFIX } from "../../themeTokens";
 
 export interface ThemeDef {
   id: string;
   label: string;
   swatches: string[];
+  /** Every `--token: value` the theme declares (names without `--`). */
+  tokens: Record<string, string>;
 }
+
+/** All custom-property declarations in a CSS block body. */
+export function parseTokens(body: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re = /--([a-z0-9-]+):\s*([^;\n]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) out[m[1]] = m[2].trim();
+  return out;
+}
+
+const SWATCH_VARS = ["bg-card", "bg-bar", "accent", "fg", "fg-mute"];
+const swatchesOf = (tokens: Record<string, string>) => SWATCH_VARS.map(n => tokens[n] ?? "#888");
 
 /** Parse themes.css at build time into selectable theme definitions with swatches. */
 export function buildThemes(): ThemeDef[] {
@@ -23,40 +39,39 @@ export function buildThemes(): ThemeDef[] {
   let i = 0;
   while ((m = blockRe.exec(rawCss)) !== null) {
     const [, id, body] = m;
-    const v = (name: string) => {
-      const vm = new RegExp(`--${name}:\\s*([^;\\n]+)`).exec(body);
-      return vm ? vm[1].trim() : "#888";
-    };
-    themes.push({
-      id,
-      label: labels[i++] ?? id,
-      swatches: [v("bg-card"), v("bg-bar"), v("accent"), v("fg"), v("fg-mute")],
-    });
+    const tokens = parseTokens(body);
+    themes.push({ id, label: labels[i++] ?? id, swatches: swatchesOf(tokens), tokens });
   }
   return themes;
 }
 
 const MATUGEN_PLACEHOLDER = ["#3a3a3a", "#2a2a2a", "#888", "#ddd", "#999"];
-const MATUGEN_VARS = ["bg-card", "bg-bar", "accent", "fg", "fg-mute"];
-
-/** Parse the matugen swatch colors out of the external matugen.css text. Unlike
- *  the built-in themes (compiled into themes.css), matugen's colors live in an
- *  external file generated at runtime, so they must be read from that CSS rather
- *  than from computed styles (which only reflect the *active* theme). */
-function parseMatugenSwatches(css: string): string[] | null {
-  const sw = MATUGEN_VARS.map(name => {
-    const m = new RegExp(`--${name}:\\s*([^;\\n]+)`).exec(css);
-    return m ? m[1].trim() : null;
-  });
-  return sw.every(Boolean) ? (sw as string[]) : null;
-}
 
 export const THEMES: ThemeDef[] = [
   ...buildThemes(),
   // Synthetic entry: matugen colors come from an external file at runtime, so it
   // isn't parsed from themes.css. Selecting it sets data-theme="matugen".
-  { id: "matugen", label: "Matugen", swatches: MATUGEN_PLACEHOLDER },
+  { id: "matugen", label: "Matugen", swatches: MATUGEN_PLACEHOLDER, tokens: {} },
 ];
+
+/** Matugen's colors live in an external file generated at runtime, so they
+ *  are read from that CSS rather than from computed styles (which only reflect
+ *  the *active* theme). Empty until loaded or when the file is absent. */
+export function useMatugenTokens(): Record<string, string> {
+  const [tokens, setTokens] = useState<Record<string, string>>({});
+  useEffect(() => {
+    invoke<string | null>("get_custom_theme_css")
+      .then(css => { if (css) setTokens(parseTokens(css)); })
+      .catch(() => {});
+  }, []);
+  return tokens;
+}
+
+/** Token values of a built-in theme (matugen's from `matugen`). */
+export function baseTokens(id: string, matugen: Record<string, string>): Record<string, string> {
+  if (id === "matugen") return matugen;
+  return THEMES.find(t => t.id === id)?.tokens ?? THEMES[0].tokens;
+}
 
 const STYLES = `
 .theme-grid {
@@ -110,6 +125,14 @@ const STYLES = `
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
 }
 
+.theme-card.custom .theme-card-label::after {
+  content: "custom";
+  margin-left: 6px;
+  font: 500 var(--fs-micro, 10px)/1 var(--font-mono);
+  color: var(--fg-dim);
+  letter-spacing: 0;
+}
+
 .theme-card-check {
   position: absolute;
   top: 7px;
@@ -143,31 +166,43 @@ if (typeof document !== "undefined") {
 }
 
 interface Props {
-  /** Currently-selected theme id. */
+  /** Currently-selected theme id (`custom:<id>` for a user preset). */
   value: string;
   onSelect: (id: string) => void;
+  /** User presets, listed after the built-in themes. */
+  custom?: CustomTheme[];
 }
 
-/** Shared 3-column theme picker grid with color swatches (Settings + onboarding). */
-export default function ThemeGrid({ value, onSelect }: Props) {
-  // Matugen colors live in an external runtime file, so fetch + parse them once
-  // so its swatches show real colors regardless of the currently-active theme.
-  const [matugen, setMatugen] = useState<string[] | null>(null);
-  useEffect(() => {
-    invoke<string | null>("get_custom_theme_css")
-      .then(css => { if (css) setMatugen(parseMatugenSwatches(css)); })
-      .catch(() => {});
-  }, []);
+/** Shared theme picker grid with color swatches: built-ins, then user presets. */
+export default function ThemeGrid({ value, onSelect, custom = [] }: Props) {
+  const matugen = useMatugenTokens();
+  const matugenSwatches = swatchesOf(matugen);
+  const hasMatugen = SWATCH_VARS.every(n => matugen[n]);
+
+  const cards = [
+    ...THEMES.map(t => ({
+      id: t.id,
+      label: t.label,
+      custom: false,
+      swatches: t.id === "matugen" && hasMatugen ? matugenSwatches : t.swatches,
+    })),
+    ...custom.map(p => ({
+      id: CUSTOM_PREFIX + p.id,
+      label: p.name || p.id,
+      custom: true,
+      swatches: swatchesOf({ ...baseTokens(p.base, matugen), ...p.colors }),
+    })),
+  ];
 
   return (
     <div className="theme-grid">
-      {THEMES.map((t) => {
-        const swatches = t.id === "matugen" && matugen ? matugen : t.swatches;
+      {cards.map((t) => {
+        const swatches = t.swatches;
         return (
         <button
           key={t.id}
           type="button"
-          className={`theme-card${value === t.id ? " selected" : ""}`}
+          className={`theme-card${t.custom ? " custom" : ""}${value === t.id ? " selected" : ""}`}
           onClick={() => onSelect(t.id)}
         >
           <div className="theme-card-label">{t.label}</div>

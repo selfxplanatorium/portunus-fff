@@ -19,6 +19,14 @@ export interface DirEstimate {
   est_secs_max: number;
 }
 
+/** A saved theme preset: a built-in base theme plus color overrides. */
+export interface CustomTheme {
+  id: string;
+  name: string;
+  base: string;
+  colors: Record<string, string>;
+}
+
 export interface Config {
   general: {
     max_results: number;
@@ -103,6 +111,10 @@ export interface Config {
     blur: boolean;
     /** Entrance + bar/window morph animations. */
     window_animations: boolean;
+    /** Per-token color overrides (token name without `--`) on top of the theme. */
+    colors: Record<string, string>;
+    /** User-saved presets, selected via `theme = "custom:<id>"`. */
+    custom_themes: CustomTheme[];
   };
   keybinds: KeybindsConfig;
   /** Per-extension state keyed by name. Absent = disabled. */

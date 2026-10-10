@@ -599,6 +599,33 @@ pub struct AppearanceConfig {
     /// Animate the launcher window: entrance on show, and the morph between
     /// the bare search bar and the full results window. Off = instant.
     pub window_animations: bool,
+    /// Per-token color overrides (`accent = "#ff8800"`, token names without the
+    /// leading `--`) painted on top of the selected theme or preset.
+    pub colors: std::collections::BTreeMap<String, String>,
+    /// User-saved theme presets. Selected via `theme = "custom:<id>"`.
+    pub custom_themes: Vec<CustomTheme>,
+}
+
+/// A user theme preset: a built-in base theme plus color overrides.
+#[derive(Debug, Clone, PartialEq, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct CustomTheme {
+    pub id: String,
+    pub name: String,
+    /// Built-in theme the preset starts from; tokens absent from `colors` use it.
+    pub base: String,
+    pub colors: std::collections::BTreeMap<String, String>,
+}
+
+impl Default for CustomTheme {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            base: "warm-dark".to_string(),
+            colors: Default::default(),
+        }
+    }
 }
 
 impl Default for AppearanceConfig {
@@ -616,6 +643,8 @@ impl Default for AppearanceConfig {
             opacity: 1.0,
             blur: false,
             window_animations: true,
+            colors: Default::default(),
+            custom_themes: Vec::new(),
         }
     }
 }
@@ -752,4 +781,25 @@ fn config_path() -> PathBuf {
 /// the external `matugen.css` theme file.
 pub fn config_dir() -> PathBuf {
     crate::paths::config_dir()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_theme_colors_roundtrip() {
+        let mut cfg = Config::default();
+        cfg.appearance.theme = "custom:ember".into();
+        cfg.appearance.colors.insert("accent".into(), "#ff8800".into());
+        cfg.appearance.custom_themes.push(CustomTheme {
+            id: "ember".into(),
+            name: "Ember".into(),
+            base: "carbon".into(),
+            colors: [("bg-card".to_string(), "rgba(10, 10, 10, 0.9)".to_string())].into(),
+        });
+        let raw = toml::to_string_pretty(&cfg).expect("serialize");
+        let back: Config = toml::from_str(&raw).expect("parse");
+        assert_eq!(back.appearance, cfg.appearance);
+    }
 }
