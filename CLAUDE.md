@@ -18,7 +18,7 @@ Commit style: terse, subject-only, no trailers (see `git log`). Never use the wo
 
 ## Releasing
 
-CI (`.github/workflows/release.yml`) builds the AppImage + .deb on every push/PR (uploads to a GitHub Release only on `v*` tags) using `bun tauri build --config src-tauri/tauri.bundle.conf.json`, which bundles libpdfium, poppler tools, tesseract data. A plain local `bun tauri build` produces bundles *without* those assets. On tag pushes CI also renders `packaging/aur/PKGBUILD` (a template with `@PKGVER@`/`@SHA256@` placeholders) with the built .deb's checksum and attaches it — **no manual sha256 editing**.
+CI (`.github/workflows/release.yml`) builds the AppImage + .deb on every push/PR (uploads to a GitHub Release only on `v*` tags) using `bun tauri build --config src-tauri/tauri.bundle.conf.json`, which bundles libpdfium, poppler tools, tesseract data. A plain local `bun tauri build` produces bundles *without* those assets. On tag pushes CI also renders `packaging/aur/PKGBUILD` (a template with `@PKGVER@`/`@SHA256@` placeholders) with the built .deb's checksum and attaches it — **no manual sha256 editing** — alongside `packaging/arch/install.sh`, the one-command Arch installer that fetches that PKGBUILD and runs `makepkg -si`.
 
 Bundle filenames come from the **`src-tauri/Cargo.toml` `version`** field (Tauri reads it; there is no `version` in `tauri.conf.json`). Before tagging `vX.Y.Z`, bump **both** `src-tauri/Cargo.toml` and `package.json` versions to `X.Y.Z` — a mismatch makes the AUR download URL (`portunus_$pkgver_amd64.deb`) 404.
 

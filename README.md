@@ -129,7 +129,26 @@ On other architectures use the Nix flake or build from source.
 
 ### Arch Linux
 
-The release ships a ready-to-build `PKGBUILD` for `portunus-fff-bin`, which installs
+One command, as your normal user:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/selfxplanatorium/portunus-fff/master/packaging/arch/install.sh | bash
+```
+
+It fetches the release's `PKGBUILD` (below), builds and installs `portunus-fff-bin`
+with `makepkg -si` so pacman tracks it, and starts Portunus. Add options after
+`bash -s --`, e.g. `… | bash -s -- --optional --autostart`:
+
+| Option | Effect |
+|---|---|
+| `--optional` | also install `cliphist`, `wl-clipboard`, `wtype`, `dictd` |
+| `--autostart` | start on login via XDG autostart (KDE, GNOME; Hyprland/sway use `exec-once`) |
+| `--version X.Y.Z` | a specific release instead of the latest |
+| `--review` | show the `PKGBUILD` and ask before building |
+| `-y` | no pacman confirmations |
+| `--uninstall` | remove the package (config stays) |
+
+Re-run it to update. To do the same by hand, the release ships a ready-to-build `PKGBUILD` for `portunus-fff-bin`, which installs
 the prebuilt `.deb` above. Its `sha256sum` is filled in by CI at release time, so
 there is nothing to edit:
 

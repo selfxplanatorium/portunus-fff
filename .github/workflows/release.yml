@@ -198,3 +198,4 @@ jobs:
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/deb/*.deb
             dist/PKGBUILD
+            packaging/arch/install.sh
